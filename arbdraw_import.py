@@ -199,7 +199,8 @@ def upload_waveform(
     timeout_ms: int,
     waveform: ArbDrawWaveform,
     payload: bytes,
-    user_slot: int,
+    user_slot: int | None,
+    channel: int,
     enable_output: bool,
     amplitude_vpp: float,
     offset_voltage: float,
@@ -215,6 +216,8 @@ def upload_waveform(
     instrument = None
     panel_locked = False
     completed = False
+    output_command = f"OUTP{channel}"
+    source_command = f"SOUR{channel}"
     try:
         instrument = resource_manager.open_resource(resource)
         instrument.timeout = timeout_ms
@@ -226,10 +229,10 @@ def upload_waveform(
             raise RuntimeError(f"Unexpected instrument identity: {identity}")
 
         _clear_scpi_errors(instrument)
-        instrument.write("OUTP1 OFF")
-        _require_no_scpi_error(instrument, "disabling channel 1")
-        if _query_nonempty(instrument, "OUTP1?") != "0":
-            raise RuntimeError("Channel 1 did not turn off")
+        instrument.write(f"{output_command} OFF")
+        _require_no_scpi_error(instrument, f"disabling channel {channel}")
+        if _query_nonempty(instrument, f"{output_command}?") != "0":
+            raise RuntimeError(f"Channel {channel} did not turn off")
 
         # Prevent front-panel changes from racing the multi-step import. The finally
         # block releases the lock if any upload or configuration command fails.
@@ -251,37 +254,46 @@ def upload_waveform(
         time.sleep(2.0)
         _require_no_scpi_error(instrument, "bulk waveform upload")
 
-        user_memory = f"USER{user_slot}"
-        instrument.write(f"DATA:COPY {user_memory},EMEMory")
-        # Large persistent copies can take longer than the USB transfer itself.
-        time.sleep(5.0)
-        _require_no_scpi_error(instrument, f"storing waveform in {user_memory}")
+        user_memory = "" if user_slot is None else f"USER{user_slot}"
+        if user_memory:
+            instrument.write(f"DATA:COPY {user_memory},EMEMory")
+            # Large persistent copies can take longer than the USB transfer itself.
+            time.sleep(5.0)
+            _require_no_scpi_error(instrument, f"storing waveform in {user_memory}")
 
-        instrument.write("SOUR1:FUNCtion EMEMory")
+        instrument.write(f"{source_command}:FUNCtion EMEMory")
         time.sleep(0.5)
-        _require_no_scpi_error(instrument, "selecting edit memory on channel 1")
-        selected_function = _query_nonempty(instrument, "SOUR1:FUNCtion?")
+        _require_no_scpi_error(
+            instrument, f"selecting edit memory on channel {channel}"
+        )
+        selected_function = _query_nonempty(
+            instrument, f"{source_command}:FUNCtion?"
+        )
         if selected_function.lower() != "ememory":
             raise RuntimeError(
-                f"Channel 1 selected {selected_function}; expected EMEMory"
+                f"Channel {channel} selected {selected_function}; expected EMEMory"
             )
 
-        instrument.write(f"SOUR1:VOLTage {amplitude_vpp:.12g}Vpp")
-        _require_no_scpi_error(instrument, "setting channel 1 amplitude")
-        instrument.write(f"SOUR1:VOLTage:OFFSet {offset_voltage:.12g}V")
-        _require_no_scpi_error(instrument, "setting channel 1 offset")
-        instrument.write(f"SOUR1:FREQuency {frequency_hz:.12g}Hz")
+        instrument.write(f"{source_command}:VOLTage {amplitude_vpp:.12g}Vpp")
+        _require_no_scpi_error(instrument, f"setting channel {channel} amplitude")
+        instrument.write(
+            f"{source_command}:VOLTage:OFFSet {offset_voltage:.12g}V"
+        )
+        _require_no_scpi_error(instrument, f"setting channel {channel} offset")
+        instrument.write(f"{source_command}:FREQuency {frequency_hz:.12g}Hz")
         status = _require_no_scpi_error(instrument, "setting record repetition rate")
 
         # Enabling the physical output is deliberately the final instrument change.
         # Any failure before completed becomes true triggers the output-off safeguard.
-        instrument.write(f"OUTP1 {'ON' if enable_output else 'OFF'}")
-        _require_no_scpi_error(instrument, "setting final channel 1 output state")
-        output = _query_nonempty(instrument, "OUTP1?")
+        instrument.write(f"{output_command} {'ON' if enable_output else 'OFF'}")
+        _require_no_scpi_error(
+            instrument, f"setting final channel {channel} output state"
+        )
+        output = _query_nonempty(instrument, f"{output_command}?")
         expected_output = "1" if enable_output else "0"
         if output != expected_output:
             raise RuntimeError(
-                f"Channel 1 output state is {output}; expected {expected_output}"
+                f"Channel {channel} output state is {output}; expected {expected_output}"
             )
 
         instrument.write("SYSTem:KLOCk OFF")
@@ -292,6 +304,7 @@ def upload_waveform(
             "identity": identity,
             "points": _query_nonempty(instrument, "DATA:POINts? EMEMory"),
             "user_memory": user_memory,
+            "channel": str(channel),
             "function": selected_function,
             "output": output,
             "error": status,
@@ -302,7 +315,7 @@ def upload_waveform(
         if instrument is not None:
             try:
                 if not completed or not enable_output:
-                    instrument.write("OUTP1 OFF")
+                    instrument.write(f"{output_command} OFF")
             finally:
                 try:
                     if panel_locked:
@@ -328,13 +341,25 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TIMEOUT_MS,
         help=f"VISA timeout in milliseconds (default: {DEFAULT_TIMEOUT_MS})",
     )
-    parser.add_argument(
+    persistence_group = parser.add_mutually_exclusive_group()
+    persistence_group.add_argument(
         "--user-slot",
         type=int,
         choices=range(32),
-        default=0,
         metavar="0..31",
-        help="persistent USER memory slot (default: 0)",
+        help="persistent USER memory slot (default: channel 1 -> 1, channel 2 -> 2)",
+    )
+    persistence_group.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="leave the waveform only in volatile edit memory",
+    )
+    parser.add_argument(
+        "--channel",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="AWG output channel to configure (default: 1)",
     )
     parser.add_argument(
         "--dry-run",
@@ -344,7 +369,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-output",
         action="store_true",
-        help="leave channel 1 enabled after a completely successful import",
+        help="leave the selected channel enabled after a completely successful import",
     )
     parser.add_argument(
         "--frequency",
@@ -408,12 +433,23 @@ def main() -> int:
             if args.frequency_hz is None
             else args.frequency_hz
         )
+        user_slot = (
+            None
+            if args.no_persist
+            else (args.channel if args.user_slot is None else args.user_slot)
+        )
 
         print(f"Name: {waveform.name}")
         print(f"Type: {waveform.waveform_type}")
         print(f"Points: {waveform.sample_count}")
         print(f"Payload: {len(payload)} bytes")
         print(f"IEEE header: {block[: 2 + len(str(len(payload)))].decode('ascii')}")
+        print(f"Channel: {args.channel}")
+        print(
+            "Persistent memory: disabled"
+            if user_slot is None
+            else f"Persistent memory: USER{user_slot}"
+        )
         print(f"Amplitude: {amplitude_vpp:g} Vpp")
         print(f"Offset: {offset_voltage:g} V")
         print(f"Record repetition: {frequency_hz:g} Hz")
@@ -427,23 +463,30 @@ def main() -> int:
             args.timeout_ms,
             waveform,
             payload,
-            args.user_slot,
+            user_slot,
+            args.channel,
             args.enable_output,
             amplitude_vpp,
             offset_voltage,
             frequency_hz,
         )
         print(result["identity"])
-        print(
-            f"Stored {result['points']} points in {result['user_memory']} and "
-            f"selected {result['function']} on CH1"
-        )
-        print(f"SCPI status: {result['error']}")
-        if result["output"] == "1":
-            print("Channel 1 output: ON")
+        if result["user_memory"]:
+            print(
+                f"Stored {result['points']} points in {result['user_memory']} and "
+                f"selected {result['function']} on CH{result['channel']}"
+            )
         else:
             print(
-                "Channel 1 output: OFF "
+                f"Loaded {result['points']} volatile points into EMEMory and "
+                f"selected {result['function']} on CH{result['channel']}"
+            )
+        print(f"SCPI status: {result['error']}")
+        if result["output"] == "1":
+            print(f"Channel {result['channel']} output: ON")
+        else:
+            print(
+                f"Channel {result['channel']} output: OFF "
                 "(add --enable-output to turn it on after import)"
             )
     except (ValueError, RuntimeError, OSError) as exc:

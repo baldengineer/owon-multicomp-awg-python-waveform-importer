@@ -1,6 +1,6 @@
 ---
 name: control-mp750290-awg
-description: Safely connect to, query, program, and diagnose the Multicomp Pro MP750290 arbitrary waveform generator (a rebadged OWON XDG3000) over USBTMC or its raw TCP SCPI socket. Use for AWG identity checks, channel control, fast 14-bit bulk waveform uploads, edit/user-memory copying, point-limit tests, SCPI error diagnosis, ArbDraw waveform integration, or MSO22 verification.
+description: Safely connect to, query, program, and diagnose the Multicomp Pro MP750290 arbitrary waveform generator (a rebadged OWON XDG3000) over USBTMC or its raw TCP SCPI socket. Use for AWG identity checks, channel control, fast 14-bit bulk waveform uploads, edit/user-memory copying, point-limit tests, SCPI error diagnosis, or MSO22 verification.
 ---
 
 # Control the MP750290 AWG
@@ -21,6 +21,10 @@ verification.
 Prefer USBTMC for bulk transfers. Open it with PyVISA, set finite timeouts plus LF read
 and write termination, and query `*IDN?` before changing state. The tested VISA backend
 is the system library at `C:\Windows\system32\visa32.dll`.
+
+On USBTMC, retry a transient empty query response only a small bounded number of times.
+After state-changing commands, verify the allocated point count, selected function,
+output state, and SCPI error queue instead of trusting a successful write alone.
 
 Use `socket.create_connection`, a finite timeout, one ASCII command plus LF per write,
 and LF-terminated query reads. Start with `*IDN?`. Do not reset the instrument unless
@@ -52,15 +56,18 @@ the raw socket and left the socket server unavailable until power-cycled.
 
 ## Control output
 
-Enable channel 1 only when requested, then verify it:
+Enable the selected channel only when requested, then verify it:
 
 ```text
-OUTP1 ON
-OUTP1?
+OUTP<channel> ON
+OUTP<channel>?
 SYSTem:ERRor:NEXT?
 ```
 
-`OUTP1?` returns `1` for on and `0` for off.
+`OUTP<channel>?` returns `1` for on and `0` for off. Keep the selected channel off
+during memory and channel configuration. For multi-step imports, use `SYSTem:KLOCk ON`
+to prevent front-panel changes, then always send `SYSTem:KLOCk OFF` in cleanup. `KLOCk`
+locks controls; it is not a documented local/remote mode switch.
 
 ## Load edit memory point-by-point
 
@@ -86,7 +93,7 @@ Point data defines shape; these settings control actual output:
 
 ```text
 SOUR1:FREQuency <frequency>Hz
-SOUR1:VOLTage <amplitude>V
+SOUR1:VOLTage <amplitude>Vpp
 SOUR1:VOLTage:OFFSet <offset>V
 OUTP1:IMPedance?
 ```
@@ -161,8 +168,8 @@ DATA:POINts? EMEMory
 
 Send the binary message with PyVISA `write_raw`. A 1,000-point full-scale sine uploaded
 successfully over USBTMC and appeared correctly in the front-panel `EMEMory` preview.
-Keep it volatile unless the user asks to store it; use `DATA:COPY USER<n>,EMEMory` to
-store it persistently.
+For ad hoc tests, keep it volatile unless the user asks to store it; use
+`DATA:COPY USER<n>,EMEMory` to store it persistently.
 
 Do not use `DATA:DATA:VALue?` to validate a bulk-loaded waveform. On this firmware,
 ASCII point queries returned zero even while the front-panel preview showed the actual
@@ -186,8 +193,7 @@ voltage steps per cycle.
 
 ## Use project resources
 
-- `awg_idn.py`: primary client and safe small upload.
-- `ArbDraw_JSON_Format.md` and `sample_json_waveform.json`: saved waveform format.
+- `awg_idn.py`: primary socket client and safe small point-by-point upload.
 - `tools/point_limit_probe.py`: paced capacity test.
 - `tools/bulk_transfer_probe.py`: experimental block probe; inspect before use.
 - `tools/README.md`: observed test behavior and failures.

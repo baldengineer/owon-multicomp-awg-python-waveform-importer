@@ -12,7 +12,7 @@ The project is intended to support two operating modes:
 The direct-control tools support identity queries, a point-by-point development upload,
 and fast USBTMC import of ArbDraw JSON waveforms. Imported waveforms are stored in a
 selectable persistent `USER` slot, retained in edit memory, and selected as the channel 1
-function while the channel output remains off.
+function by default while the selected channel output remains off.
 
 ## Hardware and connection
 
@@ -104,30 +104,40 @@ Validate and preview how an ArbDraw JSON file will be encoded without contacting
 instrument:
 
 ```powershell
-python .\arbdraw_import.py .\sample_json_waveform.json --dry-run
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --dry-run
 ```
 
-Upload the waveform over USBTMC, persist it in `USER0`, and select the existing
-`EMEMory` waveform on channel 1:
+Upload the waveform over USBTMC, persist it in `USER1`, and select the existing
+`EMEMory` waveform on the selected channel (channel 1 by default):
 
 ```powershell
-python .\arbdraw_import.py .\sample_json_waveform.json
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json
 ```
 
 Channel 1 remains off by default. Enable it only after a completely successful import:
 
 ```powershell
-python .\arbdraw_import.py .\sample_json_waveform.json --enable-output
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --enable-output
 ```
 
 The importer does not enable the output until waveform upload, persistent storage,
 waveform selection, and channel configuration have all succeeded. Any failure still
-forces channel 1 off and unlocks the front panel.
+forces the selected channel off and unlocks the front panel.
+
+Configure channel 2 instead of the default channel 1 with `--channel`:
+
+```powershell
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --channel 2
+```
+
+Only channels `1` and `2` are accepted. Output safety, waveform selection, channel
+settings, final output state, and cleanup all apply to the selected channel. The default
+persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
 
 Override the JSON-derived channel settings when needed:
 
 ```powershell
-python .\arbdraw_import.py .\sample_json_waveform.json `
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json `
     --frequency 1000 --amplitude 2.5 --offset 0.25
 ```
 
@@ -135,18 +145,29 @@ Frequency is specified in hertz, amplitude in Vpp, and offset in volts. The expl
 aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted. Omitted
 settings continue to come from the JSON metadata.
 
-Choose another persistent slot with `--user-slot 0..31`. The importer validates the
-schema, version, point count, finite sample values, declared voltage range, and the
-100,000-point hardware limit before opening the instrument.
+Choose another persistent slot with `--user-slot 0..31`; an explicit slot overrides the
+channel-based default. The importer validates the schema, version, point count, finite
+sample values, declared voltage range, and the 100,000-point hardware limit before
+opening the instrument.
+
+Skip persistent user memory and leave the waveform only in volatile `EMEMory` with:
+
+```powershell
+python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --no-persist
+```
+
+`--no-persist` and `--user-slot` are mutually exclusive. A no-persist waveform is lost
+when edit memory is cleared, including when the AWG is power-cycled.
 
 JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format using
 `lowVoltage` as code `0` and `highVoltage` as code `16383`. The importer configures
-channel 1 amplitude and offset from those levels. It calculates the arbitrary-function
-record repetition rate as `sampleRateMSa * 1,000,000 / sampleCount`; this preserves the
-sample timing even when the JSON record contains multiple waveform cycles. The output
-is kept off throughout the import. The importer locks the front panel while uploading,
-storing, selecting, and configuring the waveform, then unlocks it when finished. Its
-cleanup path also unlocks the panel if an import command fails.
+the selected channel's amplitude and offset from those levels. It calculates the
+arbitrary-function record repetition rate as
+`sampleRateMSa * 1,000,000 / sampleCount`; this preserves the sample timing even when
+the JSON record contains multiple waveform cycles. The output is kept off throughout
+the import. The importer locks the front panel while uploading, storing, selecting, and
+configuring the waveform, then unlocks it when finished. Its cleanup path also unlocks
+the panel if an import command fails.
 
 ## Bulk waveform data (`<DAB>`)
 
@@ -206,6 +227,8 @@ modes are developed.
 
 - Add support for selecting an arbitrary waveform file from the instrument's mass
   storage using the SCPI `SOURce:FUNCtion:EFILe` commands.
+- Add support for configuring waveform rise and fall times.
+- Add support for configuration through environment variables.
 
 ## Related links
 
