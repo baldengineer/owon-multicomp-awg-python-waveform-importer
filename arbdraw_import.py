@@ -201,6 +201,9 @@ def upload_waveform(
     payload: bytes,
     user_slot: int,
     enable_output: bool,
+    amplitude_vpp: float,
+    offset_voltage: float,
+    frequency_hz: float,
 ) -> dict[str, str]:
     """Bulk upload over USBTMC, persist it, select edit memory, and set final output."""
     try:
@@ -263,13 +266,11 @@ def upload_waveform(
                 f"Channel 1 selected {selected_function}; expected EMEMory"
             )
 
-        instrument.write(f"SOUR1:VOLTage {waveform.amplitude_vpp:.12g}Vpp")
+        instrument.write(f"SOUR1:VOLTage {amplitude_vpp:.12g}Vpp")
         _require_no_scpi_error(instrument, "setting channel 1 amplitude")
-        instrument.write(f"SOUR1:VOLTage:OFFSet {waveform.offset_voltage:.12g}V")
+        instrument.write(f"SOUR1:VOLTage:OFFSet {offset_voltage:.12g}V")
         _require_no_scpi_error(instrument, "setting channel 1 offset")
-        instrument.write(
-            f"SOUR1:FREQuency {waveform.repetition_frequency_hz:.12g}Hz"
-        )
+        instrument.write(f"SOUR1:FREQuency {frequency_hz:.12g}Hz")
         status = _require_no_scpi_error(instrument, "setting record repetition rate")
 
         # Enabling the physical output is deliberately the final instrument change.
@@ -345,6 +346,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="leave channel 1 enabled after a completely successful import",
     )
+    parser.add_argument(
+        "--frequency",
+        "--frequency-hz",
+        dest="frequency_hz",
+        type=float,
+        help="override the JSON-derived record repetition frequency in Hz",
+    )
+    parser.add_argument(
+        "--amplitude",
+        "--amplitude-vpp",
+        dest="amplitude_vpp",
+        type=float,
+        help="override the JSON-derived channel amplitude in Vpp",
+    )
+    parser.add_argument(
+        "--offset",
+        "--offset-v",
+        dest="offset_voltage",
+        type=float,
+        help="override the JSON-derived channel offset in volts",
+    )
     return parser.parse_args()
 
 
@@ -353,20 +375,48 @@ def main() -> int:
     if args.timeout_ms <= 0:
         print("--timeout-ms must be greater than zero", file=sys.stderr)
         return 2
+    if args.frequency_hz is not None and (
+        not math.isfinite(args.frequency_hz) or args.frequency_hz <= 0
+    ):
+        print("--frequency must be a positive finite number", file=sys.stderr)
+        return 2
+    if args.amplitude_vpp is not None and (
+        not math.isfinite(args.amplitude_vpp) or args.amplitude_vpp <= 0
+    ):
+        print("--amplitude must be a positive finite number", file=sys.stderr)
+        return 2
+    if args.offset_voltage is not None and not math.isfinite(args.offset_voltage):
+        print("--offset must be a finite number", file=sys.stderr)
+        return 2
 
     try:
         waveform = load_arbdraw_json(args.json_file)
         payload = encode_dab(waveform)
         block = make_ieee_block(payload)
+        amplitude_vpp = (
+            waveform.amplitude_vpp
+            if args.amplitude_vpp is None
+            else args.amplitude_vpp
+        )
+        offset_voltage = (
+            waveform.offset_voltage
+            if args.offset_voltage is None
+            else args.offset_voltage
+        )
+        frequency_hz = (
+            waveform.repetition_frequency_hz
+            if args.frequency_hz is None
+            else args.frequency_hz
+        )
 
         print(f"Name: {waveform.name}")
         print(f"Type: {waveform.waveform_type}")
         print(f"Points: {waveform.sample_count}")
         print(f"Payload: {len(payload)} bytes")
         print(f"IEEE header: {block[: 2 + len(str(len(payload)))].decode('ascii')}")
-        print(f"Amplitude: {waveform.amplitude_vpp:g} Vpp")
-        print(f"Offset: {waveform.offset_voltage:g} V")
-        print(f"Record repetition: {waveform.repetition_frequency_hz:g} Hz")
+        print(f"Amplitude: {amplitude_vpp:g} Vpp")
+        print(f"Offset: {offset_voltage:g} V")
+        print(f"Record repetition: {frequency_hz:g} Hz")
 
         if args.dry_run:
             print("Dry run complete; the instrument was not contacted")
@@ -379,6 +429,9 @@ def main() -> int:
             payload,
             args.user_slot,
             args.enable_output,
+            amplitude_vpp,
+            offset_voltage,
+            frequency_hz,
         )
         print(result["identity"])
         print(

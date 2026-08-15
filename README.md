@@ -124,6 +124,17 @@ The importer does not enable the output until waveform upload, persistent storag
 waveform selection, and channel configuration have all succeeded. Any failure still
 forces channel 1 off and unlocks the front panel.
 
+Override the JSON-derived channel settings when needed:
+
+```powershell
+python .\arbdraw_import.py .\sample_json_waveform.json `
+    --frequency 1000 --amplitude 2.5 --offset 0.25
+```
+
+Frequency is specified in hertz, amplitude in Vpp, and offset in volts. The explicit
+aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted. Omitted
+settings continue to come from the JSON metadata.
+
 Choose another persistent slot with `--user-slot 0..31`. The importer validates the
 schema, version, point count, finite sample values, declared voltage range, and the
 100,000-point hardware limit before opening the instrument.
