@@ -83,6 +83,38 @@ The point count and peak amplitude can be changed for development:
 python .\awg_idn.py --load-test-waveform --samples 32 --amplitude 0.5
 ```
 
+## Bulk waveform data (`<DAB>`)
+
+The programmer's manual calls the binary portion of a bulk waveform upload `<DAB>`.
+In practical terms, it is the complete list of waveform heights packed into bytes. It
+does not contain output voltages: each point is a normalized shape value that the AWG
+later scales using the channel's amplitude and offset settings.
+
+The MP750290 expects each point to be an unsigned 14-bit number from `0` through
+`16383`, stored in a two-byte big-endian integer. Code `0` represents the bottom of the
+waveform, `8192` is approximately the center, and `16383` represents the top. To convert
+a bipolar shape value from `-1.0` through `+1.0`:
+
+```python
+code = round(((value + 1.0) / 2.0) * 16383)
+sample_bytes = struct.pack(">H", code)
+```
+
+Concatenate the two-byte samples, then prefix them with an IEEE 488.2 definite-length
+block header. The header starts with `#`, gives the number of decimal digits used for
+the byte count, and then gives the payload byte count itself. For example, 1,000 points
+occupy 2,000 bytes, so their header is `#42000`:
+
+```text
+DATA:POINts EMEMory,1000
+DATA:DATA EMEMory,#42000<2000 bytes of waveform data>
+```
+
+This format was verified over USBTMC with a 1,000-point sine wave. The AWG's front-panel
+preview showed the expected waveform. On the tested firmware, individual ASCII point
+queries returned misleading zeros after a bulk upload, so use the SCPI error queue and
+point count together with the front-panel preview or an oscilloscope for verification.
+
 ## Reference material
 
 The local `datasheets/` directory contains the XDG3000 SCPI programmer's manual used

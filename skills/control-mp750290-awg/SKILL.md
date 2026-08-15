@@ -1,6 +1,6 @@
 ---
 name: control-mp750290-awg
-description: Safely connect to, query, program, and diagnose the Multicomp Pro MP750290 arbitrary waveform generator (a rebadged OWON XDG3000) over its raw TCP SCPI socket. Use for AWG identity checks, channel control, edit-memory waveform loading, point-limit tests, SCPI error diagnosis, binary-block experiments, ArbDraw waveform integration, or MSO22 verification.
+description: Safely connect to, query, program, and diagnose the Multicomp Pro MP750290 arbitrary waveform generator (a rebadged OWON XDG3000) over USBTMC or its raw TCP SCPI socket. Use for AWG identity checks, channel control, fast 14-bit bulk waveform uploads, edit/user-memory copying, point-limit tests, SCPI error diagnosis, ArbDraw waveform integration, or MSO22 verification.
 ---
 
 # Control the MP750290 AWG
@@ -11,11 +11,16 @@ verification.
 
 ## Connect
 
+- Preferred USBTMC VISA resource: `USB0::0x5345::0x1235::2025332::INSTR`
 - Host: `192.168.128.29`
 - Raw TCP port: `3000`
 - Terminator: LF (`\n`)
 - Expected identity prefix: `Newark,MP750290`
 - Existing client: `awg_idn.py`
+
+Prefer USBTMC for bulk transfers. Open it with PyVISA, set finite timeouts plus LF read
+and write termination, and query `*IDN?` before changing state. The tested VISA backend
+is the system library at `C:\Windows\system32\visa32.dll`.
 
 Use `socket.create_connection`, a finite timeout, one ASCII command plus LF per write,
 and LF-terminated query reads. Start with `*IDN?`. Do not reset the instrument unless
@@ -35,8 +40,8 @@ the user explicitly requests it.
    if unavailable and ask for a power cycle. Send a desktop alert if the user requested
    restart notifications.
 
-Never run `DATA:DATA? EMEMory` casually. On firmware `FV:V2.7.0`, it timed out and
-left the socket server unavailable until power-cycled.
+Never run `DATA:DATA? EMEMory` casually. On firmware `FV:V2.7.0`, it timed out over
+the raw socket and left the socket server unavailable until power-cycled.
 
 ## Control output
 
@@ -81,15 +86,23 @@ OUTP1:IMPedance?
 
 ## Use persistent memory or mass storage
 
-Copy edit memory into `USER0` and select it with:
+`DATA:COPY` uses the unusual **destination-first** order. Copy edit memory into
+`USER0` and select it with:
 
 ```text
 DATA:COPY USER0,EMEMory
 SOUR1:FUNCtion USER0
 ```
 
-Slots `USER0` through `USER31` exist. The unusual copy argument order is confirmed by
-the manual.
+Load `USER0` into edit memory with:
+
+```text
+DATA:COPY EMEMory,USER0
+```
+
+Slots `USER0` through `USER31` exist. `DATA:COPY` is the store/load operation; no
+additional save or commit command is required. The destination-first order is confirmed
+by the manual and live sine/triangle copies between `USER0`, `EMEMory`, and `USER4`.
 
 Mass-storage selection is documented but untested:
 
@@ -100,20 +113,56 @@ SOUR1:FUNCtion EFILe
 
 Do not claim this works until verified on the instrument.
 
-## Treat bulk transfer as experimental
+## Upload waveforms in bulk over USBTMC
 
-The manual documents `DATA:DATA EMEMory,#<length-header><DAB payload>` but never
-defines `<DAB>` width, byte order, or scaling.
+Use the verified `<DAB>` representation:
 
-- Legacy file encoding (unsigned 16-bit little-endian, `10000 = 0 V`, one code per mV)
-  is not the SCPI encoding; a 16-point upload read back as zeros.
-- Signed/unsigned 16-bit and one-byte probes have not produced valid values.
-- Short and fixed-four-digit headers have encountered timeouts.
-- The server often recovers after disconnect, but binary readback required a reboot.
+- one unsigned 14-bit code per waveform point;
+- store each code in a two-byte unsigned integer;
+- transmit the two bytes in big-endian order;
+- map normalized values from `0.0` through `1.0` onto codes `0` through `16383`; and
+- wrap the payload in an IEEE 488.2 definite-length block.
 
-Do not send large binary blocks. Prefer capturing an upload from OWON's PC software or
-obtaining a vendor example. Keep experiments small, output-off, and followed by ASCII
-point queries.
+For a bipolar shape value in `[-1.0, 1.0]`, use:
+
+```python
+code = round(((value + 1.0) / 2.0) * 16383)
+sample_bytes = struct.pack(">H", code)
+```
+
+Clamp source values and codes to their valid ranges. For `N` points, concatenate the
+two-byte samples into a payload of `2 * N` bytes and construct the header as:
+
+```python
+payload_length = len(payload)
+header = f"#{len(str(payload_length))}{payload_length}".encode("ascii")
+message = b"DATA:DATA EMEMory," + header + payload + b"\n"
+```
+
+For 1,000 points, the payload length is 2,000 bytes and the header is `#42000`:
+
+```text
+OUTP1 OFF
+DATA:POINts EMEMory,1000
+DATA:DATA EMEMory,#42000<2000-byte payload><LF>
+SYSTem:ERRor:NEXT?
+DATA:POINts? EMEMory
+```
+
+Send the binary message with PyVISA `write_raw`. A 1,000-point full-scale sine uploaded
+successfully over USBTMC and appeared correctly in the front-panel `EMEMory` preview.
+Keep it volatile unless the user asks to store it; use `DATA:COPY USER<n>,EMEMory` to
+store it persistently.
+
+Do not use `DATA:DATA:VALue?` to validate a bulk-loaded waveform. On this firmware,
+ASCII point queries returned zero even while the front-panel preview showed the actual
+binary-loaded waveform. Validate the point count and error queue, then use the front-panel
+preview or an oscilloscope for shape verification.
+
+Do not use these disproven encodings: IEEE float16, IEEE float32, signed 16-bit integers,
+little-endian unsigned integers, or the legacy waveform-file encoding (`10000 = 0`, one
+count per millivolt). Little-endian float16 data produced a distinctive byte-swapped
+preview rather than a sine.
 
 ## Verify with MSO22
 
