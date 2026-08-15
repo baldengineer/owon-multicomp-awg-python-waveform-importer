@@ -29,6 +29,10 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+# Project datasheets
+datasheets/
+old code/
+
 # Environment variables and secrets
 .env
 .env.*
