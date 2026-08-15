@@ -6,7 +6,8 @@ generator, a rebadged OWON XDG3000-series instrument.
 The project is intended to support two operating modes:
 
 1. Generate binary arbitrary-waveform files for manual transfer to the instrument.
-2. Connect directly to the instrument over the network and control it with SCPI.
+2. Connect directly to the instrument over USBTMC or the network and control it with
+   SCPI.
 
 The direct-control mode currently supports an identity query and an opt-in development
 upload. The included script can generate a small sine wave, write it point-by-point to
@@ -16,6 +17,7 @@ the instrument's edit memory, and select that memory as the channel 1 function.
 
 - Instrument: Multicomp Pro MP750290
 - Compatible platform: OWON XDG3000 series
+- USBTMC VISA resource: `USB0::0x5345::0x1235::2025332::INSTR`
 - Default address: `192.168.128.29`
 - Default TCP port: `3000`
 - SCPI command terminator: newline (`\n`)
@@ -114,6 +116,19 @@ This format was verified over USBTMC with a 1,000-point sine wave. The AWG's fro
 preview showed the expected waveform. On the tested firmware, individual ASCII point
 queries returned misleading zeros after a bulk upload, so use the SCPI error queue and
 point count together with the front-panel preview or an oscilloscope for verification.
+
+### USBTMC versus LAN
+
+Use USBTMC for bulk binary waveform uploads. The verified format successfully transferred
+1,000-, 10,000-, and 100,000-point waveforms over USBTMC; 100,000 points is the confirmed
+edit-memory limit on firmware `FV:V2.7.0`.
+
+The raw TCP connection at port `3000` works for ASCII SCPI, including identity queries,
+output control, memory allocation, and carefully paced point-by-point writes. It does not
+accept the same binary block reliably. A 1,000-point block that worked over USBTMC returned
+`-101,"Invalid character"` over LAN, although the AWG remained responsive and channel 1
+stayed off. Binary data can contain newline and other control bytes, so the likely cause is
+a conflict with the socket's LF-delimited command parser; this has not been proven.
 
 ## Reference material
 

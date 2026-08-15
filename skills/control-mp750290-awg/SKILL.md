@@ -26,6 +26,13 @@ Use `socket.create_connection`, a finite timeout, one ASCII command plus LF per 
 and LF-terminated query reads. Start with `*IDN?`. Do not reset the instrument unless
 the user explicitly requests it.
 
+Use LAN for ASCII SCPI only. On firmware `FV:V2.7.0`, the same verified 1,000-point
+binary block that works over USBTMC returned `-101,"Invalid character"` over the raw
+TCP socket. The allocation succeeded and the instrument stayed responsive, but the
+waveform did not upload. Binary payload bytes may conflict with the socket's LF-delimited
+parser; treat that explanation as likely, not proven. Do not retry LAN bulk transfer
+unless explicitly investigating the transport failure.
+
 ## Apply live-operation safety
 
 1. Query `*IDN?` before modifying state.
@@ -114,6 +121,9 @@ SOUR1:FUNCtion EFILe
 Do not claim this works until verified on the instrument.
 
 ## Upload waveforms in bulk over USBTMC
+
+Treat USBTMC as required for this workflow. Do not send the block through the raw LAN
+socket merely because ASCII SCPI works there.
 
 Use the verified `<DAB>` representation:
 
