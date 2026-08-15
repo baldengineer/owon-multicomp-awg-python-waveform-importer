@@ -63,8 +63,10 @@ def require_no_scpi_error(instrument: ScpiSocket, stage: str) -> str:
     return status
 
 
-def load_edit_memory(instrument: ScpiSocket, samples: list[float]) -> dict[str, str]:
-    """Load voltage samples into edit memory and select it on channel 1.
+def load_edit_memory(
+    instrument: ScpiSocket, samples: list[float], user_slot: int
+) -> dict[str, str]:
+    """Load samples into edit memory, persist them in user memory, and select edit memory.
 
     Channel 1 is deliberately left disabled. Point indices are currently assumed to
     be one-based, matching the queries in the project's earlier control script.
@@ -83,10 +85,18 @@ def load_edit_memory(instrument: ScpiSocket, samples: list[float]) -> dict[str, 
         instrument.write(f"DATA:DATA:VALue EMEMory,{point},{voltage:.12g}V")
         require_no_scpi_error(instrument, f"writing point {point}")
 
+    user_memory = f"USER{user_slot}"
+
+    # DATA:COPY uses destination-first order. Save the completed volatile waveform
+    # into a persistent user slot; EMEMory already contains the same waveform.
+    instrument.write(f"DATA:COPY {user_memory},EMEMory")
+    require_no_scpi_error(instrument, f"storing edit memory in {user_memory}")
+
     instrument.write("SOUR1:FUNCtion EMEMory")
     status = require_no_scpi_error(instrument, "selecting edit memory")
 
     result = {
+        "user_memory": user_memory,
         "points": instrument.query("DATA:POINts? EMEMory"),
         "first_value": instrument.query("DATA:DATA:VALue? EMEMory,1"),
         "last_value": instrument.query(
@@ -114,7 +124,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--load-test-waveform",
         action="store_true",
-        help="load a generated sine wave into edit memory; channel 1 remains off",
+        help=(
+            "load a generated sine wave into edit memory and persist it in USER "
+            "memory; channel 1 remains off"
+        ),
     )
     parser.add_argument(
         "--samples",
@@ -127,6 +140,14 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="test-waveform peak amplitude in volts (default: 1.0)",
+    )
+    parser.add_argument(
+        "--user-slot",
+        type=int,
+        choices=range(32),
+        default=0,
+        metavar="0..31",
+        help="persistent USER memory slot for waveform uploads (default: 0)",
     )
     return parser.parse_args()
 
@@ -148,10 +169,11 @@ def main() -> int:
 
             if args.load_test_waveform:
                 samples = generate_sine(args.samples, args.amplitude)
-                result = load_edit_memory(instrument, samples)
+                result = load_edit_memory(instrument, samples, args.user_slot)
                 print(
-                    f"Loaded {result['points']} sine-wave points into EMEMory "
-                    f"at +/-{args.amplitude:g} V"
+                    f"Stored {result['points']} sine-wave points in "
+                    f"{result['user_memory']} while retaining them in EMEMory at "
+                    f"+/-{args.amplitude:g} V"
                 )
                 print(f"First point: {result['first_value']}")
                 print(f"Last point:  {result['last_value']}")

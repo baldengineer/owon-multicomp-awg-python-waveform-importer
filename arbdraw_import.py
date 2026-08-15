@@ -1,0 +1,404 @@
+"""Import an ArbDraw JSON waveform into an MP750290 over USBTMC."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import struct
+import sys
+import time
+import warnings
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_USB_RESOURCE = "USB0::0x5345::0x1235::2025332::INSTR"
+DEFAULT_TIMEOUT_MS = 60_000
+EXPECTED_IDENTITY_PREFIX = "Newark,MP750290"
+MAX_POINT_COUNT = 100_000
+MAX_DAC_CODE = 16_383
+
+
+@dataclass(frozen=True)
+class ArbDrawWaveform:
+    """Validated ArbDraw samples and the metadata needed by the AWG."""
+
+    name: str
+    waveform_type: str
+    values: tuple[float, ...]
+    low_voltage: float
+    high_voltage: float
+    sample_rate_sa: float
+
+    @property
+    def sample_count(self) -> int:
+        return len(self.values)
+
+    @property
+    def amplitude_vpp(self) -> float:
+        return self.high_voltage - self.low_voltage
+
+    @property
+    def offset_voltage(self) -> float:
+        return (self.high_voltage + self.low_voltage) / 2.0
+
+    @property
+    def repetition_frequency_hz(self) -> float:
+        # One pass through edit memory is one arbitrary-function period. A JSON file
+        # can contain multiple cycles, so this may differ from waveform.frequencyHz.
+        return self.sample_rate_sa / self.sample_count
+
+
+def _finite_number(value: Any, field: str) -> float:
+    """Convert JSON numeric metadata while rejecting booleans and non-finite values."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number")
+    try:
+        converted = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if not math.isfinite(converted):
+        raise ValueError(f"{field} must be a finite number")
+    return converted
+
+
+def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
+    """Read and strictly validate the authoritative ArbDraw sample array."""
+    source = Path(path)
+    try:
+        project = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read ArbDraw JSON: {exc}") from exc
+
+    if not isinstance(project, dict):
+        raise ValueError("ArbDraw project must be a JSON object")
+    if project.get("schema") != "arbdraw.waveform":
+        raise ValueError("Unsupported ArbDraw schema; expected arbdraw.waveform")
+    if project.get("version") != 1:
+        raise ValueError("Unsupported ArbDraw version; expected 1")
+
+    waveform = project.get("waveform")
+    if not isinstance(waveform, dict):
+        raise ValueError("Missing waveform object")
+
+    sample_count_number = _finite_number(
+        waveform.get("sampleCount"), "waveform.sampleCount"
+    )
+    sample_count = math.floor(sample_count_number + 0.5)
+    if not 2 <= sample_count <= MAX_POINT_COUNT:
+        raise ValueError(
+            f"waveform.sampleCount must resolve to 2 through {MAX_POINT_COUNT}"
+        )
+
+    values = waveform.get("values")
+    if not isinstance(values, list) or len(values) != sample_count:
+        raise ValueError("waveform.values length must equal waveform.sampleCount")
+
+    converted_values: list[float] = []
+    for index, value in enumerate(values):
+        # ArbDraw requires actual JSON numbers in the sample array, not numeric strings.
+        if isinstance(value, bool) or type(value) not in (int, float):
+            raise ValueError(f"waveform.values[{index}] must be a finite JSON number")
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ValueError(f"waveform.values[{index}] must be finite")
+        converted_values.append(converted)
+
+    low_voltage = _finite_number(
+        waveform.get("lowVoltage"), "waveform.lowVoltage"
+    )
+    high_voltage = _finite_number(
+        waveform.get("highVoltage"), "waveform.highVoltage"
+    )
+    if high_voltage <= low_voltage:
+        raise ValueError("waveform.highVoltage must be greater than lowVoltage")
+
+    tolerance = max(1.0, abs(low_voltage), abs(high_voltage)) * 1e-9
+    for index, value in enumerate(converted_values):
+        if value < low_voltage - tolerance or value > high_voltage + tolerance:
+            raise ValueError(
+                f"waveform.values[{index}]={value:g} is outside the declared "
+                f"range {low_voltage:g} through {high_voltage:g}"
+            )
+
+    sample_rate_msa = _finite_number(
+        waveform.get("sampleRateMSa"), "waveform.sampleRateMSa"
+    )
+    if sample_rate_msa <= 0:
+        raise ValueError("waveform.sampleRateMSa must be greater than zero")
+
+    name = project.get("name", "Imported waveform")
+    if not isinstance(name, str):
+        name = str(name)
+    waveform_type = waveform.get("type", "custom")
+    if not isinstance(waveform_type, str):
+        waveform_type = "custom"
+
+    return ArbDrawWaveform(
+        name=name,
+        waveform_type=waveform_type,
+        values=tuple(converted_values),
+        low_voltage=low_voltage,
+        high_voltage=high_voltage,
+        sample_rate_sa=sample_rate_msa * 1_000_000.0,
+    )
+
+
+def encode_dab(waveform: ArbDrawWaveform) -> bytes:
+    """Encode samples as verified unsigned 14-bit big-endian AWG codes."""
+    span = waveform.amplitude_vpp
+    codes = []
+    for value in waveform.values:
+        normalized = (value - waveform.low_voltage) / span
+        normalized = min(1.0, max(0.0, normalized))
+        code = int(normalized * MAX_DAC_CODE + 0.5)
+        codes.append(code)
+    return struct.pack(f">{len(codes)}H", *codes)
+
+
+def make_ieee_block(payload: bytes) -> bytes:
+    """Wrap payload bytes in an IEEE 488.2 definite-length block."""
+    byte_count = str(len(payload)).encode("ascii")
+    return b"#" + str(len(byte_count)).encode("ascii") + byte_count + payload
+
+
+def _query_nonempty(instrument: Any, command: str) -> str:
+    """Query USBTMC and retry transient empty end-of-message responses."""
+    for _ in range(3):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="read string doesn't end with termination characters",
+                category=UserWarning,
+            )
+            response = instrument.query(command).strip()
+        if response:
+            return response
+        time.sleep(0.25)
+    raise RuntimeError(f"Instrument returned an empty response to {command}")
+
+
+def _require_no_scpi_error(instrument: Any, stage: str) -> str:
+    status = _query_nonempty(instrument, "SYSTem:ERRor:NEXT?")
+    if not status.lstrip().startswith("0"):
+        raise RuntimeError(f"SCPI error after {stage}: {status}")
+    return status
+
+
+def _clear_scpi_errors(instrument: Any) -> None:
+    for _ in range(64):
+        if _query_nonempty(instrument, "SYSTem:ERRor:NEXT?").startswith("0"):
+            return
+    raise RuntimeError("SCPI error queue did not clear")
+
+
+def upload_waveform(
+    resource: str,
+    timeout_ms: int,
+    waveform: ArbDrawWaveform,
+    payload: bytes,
+    user_slot: int,
+    enable_output: bool,
+) -> dict[str, str]:
+    """Bulk upload over USBTMC, persist it, select edit memory, and set final output."""
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is required for instrument uploads") from exc
+
+    resource_manager = pyvisa.ResourceManager()
+    instrument = None
+    panel_locked = False
+    completed = False
+    try:
+        instrument = resource_manager.open_resource(resource)
+        instrument.timeout = timeout_ms
+        instrument.read_termination = "\n"
+        instrument.write_termination = "\n"
+
+        identity = _query_nonempty(instrument, "*IDN?")
+        if not identity.startswith(EXPECTED_IDENTITY_PREFIX):
+            raise RuntimeError(f"Unexpected instrument identity: {identity}")
+
+        _clear_scpi_errors(instrument)
+        instrument.write("OUTP1 OFF")
+        _require_no_scpi_error(instrument, "disabling channel 1")
+        if _query_nonempty(instrument, "OUTP1?") != "0":
+            raise RuntimeError("Channel 1 did not turn off")
+
+        # Prevent front-panel changes from racing the multi-step import. The finally
+        # block releases the lock if any upload or configuration command fails.
+        instrument.write("SYSTem:KLOCk ON")
+        panel_locked = True
+        _require_no_scpi_error(instrument, "locking the front panel")
+
+        instrument.write(f"DATA:POINts EMEMory,{waveform.sample_count}")
+        _require_no_scpi_error(instrument, "allocating edit memory")
+        allocated_points = _query_nonempty(instrument, "DATA:POINts? EMEMory")
+        if allocated_points != str(waveform.sample_count):
+            raise RuntimeError(
+                f"AWG allocated {allocated_points} points; expected "
+                f"{waveform.sample_count}"
+            )
+
+        message = b"DATA:DATA EMEMory," + make_ieee_block(payload) + b"\n"
+        instrument.write_raw(message)
+        time.sleep(2.0)
+        _require_no_scpi_error(instrument, "bulk waveform upload")
+
+        user_memory = f"USER{user_slot}"
+        instrument.write(f"DATA:COPY {user_memory},EMEMory")
+        # Large persistent copies can take longer than the USB transfer itself.
+        time.sleep(5.0)
+        _require_no_scpi_error(instrument, f"storing waveform in {user_memory}")
+
+        instrument.write("SOUR1:FUNCtion EMEMory")
+        time.sleep(0.5)
+        _require_no_scpi_error(instrument, "selecting edit memory on channel 1")
+        selected_function = _query_nonempty(instrument, "SOUR1:FUNCtion?")
+        if selected_function.lower() != "ememory":
+            raise RuntimeError(
+                f"Channel 1 selected {selected_function}; expected EMEMory"
+            )
+
+        instrument.write(f"SOUR1:VOLTage {waveform.amplitude_vpp:.12g}Vpp")
+        _require_no_scpi_error(instrument, "setting channel 1 amplitude")
+        instrument.write(f"SOUR1:VOLTage:OFFSet {waveform.offset_voltage:.12g}V")
+        _require_no_scpi_error(instrument, "setting channel 1 offset")
+        instrument.write(
+            f"SOUR1:FREQuency {waveform.repetition_frequency_hz:.12g}Hz"
+        )
+        status = _require_no_scpi_error(instrument, "setting record repetition rate")
+
+        # Enabling the physical output is deliberately the final instrument change.
+        # Any failure before completed becomes true triggers the output-off safeguard.
+        instrument.write(f"OUTP1 {'ON' if enable_output else 'OFF'}")
+        _require_no_scpi_error(instrument, "setting final channel 1 output state")
+        output = _query_nonempty(instrument, "OUTP1?")
+        expected_output = "1" if enable_output else "0"
+        if output != expected_output:
+            raise RuntimeError(
+                f"Channel 1 output state is {output}; expected {expected_output}"
+            )
+
+        instrument.write("SYSTem:KLOCk OFF")
+        _require_no_scpi_error(instrument, "unlocking the front panel")
+        panel_locked = False
+
+        result = {
+            "identity": identity,
+            "points": _query_nonempty(instrument, "DATA:POINts? EMEMory"),
+            "user_memory": user_memory,
+            "function": selected_function,
+            "output": output,
+            "error": status,
+        }
+        completed = True
+        return result
+    finally:
+        if instrument is not None:
+            try:
+                if not completed or not enable_output:
+                    instrument.write("OUTP1 OFF")
+            finally:
+                try:
+                    if panel_locked:
+                        instrument.write("SYSTem:KLOCk OFF")
+                finally:
+                    instrument.close()
+        resource_manager.close()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Import an ArbDraw JSON waveform into an MP750290 over USBTMC."
+    )
+    parser.add_argument("json_file", type=Path, help="ArbDraw .json waveform file")
+    parser.add_argument(
+        "--resource",
+        default=DEFAULT_USB_RESOURCE,
+        help=f"VISA resource (default: {DEFAULT_USB_RESOURCE})",
+    )
+    parser.add_argument(
+        "--timeout-ms",
+        type=int,
+        default=DEFAULT_TIMEOUT_MS,
+        help=f"VISA timeout in milliseconds (default: {DEFAULT_TIMEOUT_MS})",
+    )
+    parser.add_argument(
+        "--user-slot",
+        type=int,
+        choices=range(32),
+        default=0,
+        metavar="0..31",
+        help="persistent USER memory slot (default: 0)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate and encode the file without contacting the AWG",
+    )
+    parser.add_argument(
+        "--enable-output",
+        action="store_true",
+        help="leave channel 1 enabled after a completely successful import",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.timeout_ms <= 0:
+        print("--timeout-ms must be greater than zero", file=sys.stderr)
+        return 2
+
+    try:
+        waveform = load_arbdraw_json(args.json_file)
+        payload = encode_dab(waveform)
+        block = make_ieee_block(payload)
+
+        print(f"Name: {waveform.name}")
+        print(f"Type: {waveform.waveform_type}")
+        print(f"Points: {waveform.sample_count}")
+        print(f"Payload: {len(payload)} bytes")
+        print(f"IEEE header: {block[: 2 + len(str(len(payload)))].decode('ascii')}")
+        print(f"Amplitude: {waveform.amplitude_vpp:g} Vpp")
+        print(f"Offset: {waveform.offset_voltage:g} V")
+        print(f"Record repetition: {waveform.repetition_frequency_hz:g} Hz")
+
+        if args.dry_run:
+            print("Dry run complete; the instrument was not contacted")
+            return 0
+
+        result = upload_waveform(
+            args.resource,
+            args.timeout_ms,
+            waveform,
+            payload,
+            args.user_slot,
+            args.enable_output,
+        )
+        print(result["identity"])
+        print(
+            f"Stored {result['points']} points in {result['user_memory']} and "
+            f"selected {result['function']} on CH1"
+        )
+        print(f"SCPI status: {result['error']}")
+        if result["output"] == "1":
+            print("Channel 1 output: ON")
+        else:
+            print(
+                "Channel 1 output: OFF "
+                "(add --enable-output to turn it on after import)"
+            )
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"Import failed: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

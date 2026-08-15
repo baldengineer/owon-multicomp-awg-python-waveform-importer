@@ -9,9 +9,10 @@ The project is intended to support two operating modes:
 2. Connect directly to the instrument over USBTMC or the network and control it with
    SCPI.
 
-The direct-control mode currently supports an identity query and an opt-in development
-upload. The included script can generate a small sine wave, write it point-by-point to
-the instrument's edit memory, and select that memory as the channel 1 function.
+The direct-control tools support identity queries, a point-by-point development upload,
+and fast USBTMC import of ArbDraw JSON waveforms. Imported waveforms are stored in a
+selectable persistent `USER` slot, retained in edit memory, and selected as the channel 1
+function while the channel output remains off.
 
 ## Hardware and connection
 
@@ -75,15 +76,66 @@ Generate a 16-point, 1 V peak sine wave and load it into `EMEMory`:
 python .\awg_idn.py --load-test-waveform
 ```
 
-The upload uses the documented `DATA:POINts` and `DATA:DATA:VALue` commands, reads
-back the first and last samples, selects `EMEMory` for channel 1, and checks the SCPI
-error queue. Channel 1 is disabled before the upload and is deliberately left off.
+The upload uses the documented `DATA:POINts` and `DATA:DATA:VALue` commands, stores
+the completed edit-memory waveform in `USER0`, selects the existing `EMEMory` copy for
+channel 1, and checks the SCPI error queue. No copy back is needed because the waveform
+must already be in `EMEMory` before it can be stored. The persistent user-memory copy
+survives when `EMEMory` is cleared during a power cycle. Channel 1 is disabled before
+the upload and is deliberately left off.
 
 The point count and peak amplitude can be changed for development:
 
 ```powershell
 python .\awg_idn.py --load-test-waveform --samples 32 --amplitude 0.5
 ```
+
+Choose a persistent waveform slot from `USER0` through `USER31` with `--user-slot`:
+
+```powershell
+python .\awg_idn.py --load-test-waveform --user-slot 4
+```
+
+The default is `--user-slot 0`. Values outside `0` through `31` are rejected before
+the instrument connection is opened.
+
+## Import an ArbDraw JSON waveform
+
+Validate and preview how an ArbDraw JSON file will be encoded without contacting the
+instrument:
+
+```powershell
+python .\arbdraw_import.py .\sample_json_waveform.json --dry-run
+```
+
+Upload the waveform over USBTMC, persist it in `USER0`, and select the existing
+`EMEMory` waveform on channel 1:
+
+```powershell
+python .\arbdraw_import.py .\sample_json_waveform.json
+```
+
+Channel 1 remains off by default. Enable it only after a completely successful import:
+
+```powershell
+python .\arbdraw_import.py .\sample_json_waveform.json --enable-output
+```
+
+The importer does not enable the output until waveform upload, persistent storage,
+waveform selection, and channel configuration have all succeeded. Any failure still
+forces channel 1 off and unlocks the front panel.
+
+Choose another persistent slot with `--user-slot 0..31`. The importer validates the
+schema, version, point count, finite sample values, declared voltage range, and the
+100,000-point hardware limit before opening the instrument.
+
+JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format using
+`lowVoltage` as code `0` and `highVoltage` as code `16383`. The importer configures
+channel 1 amplitude and offset from those levels. It calculates the arbitrary-function
+record repetition rate as `sampleRateMSa * 1,000,000 / sampleCount`; this preserves the
+sample timing even when the JSON record contains multiple waveform cycles. The output
+is kept off throughout the import. The importer locks the front panel while uploading,
+storing, selecting, and configuring the waveform, then unlocks it when finished. Its
+cleanup path also unlocks the panel if an import command fails.
 
 ## Bulk waveform data (`<DAB>`)
 
