@@ -257,14 +257,6 @@ accept the same binary block reliably. A 1,000-point block that worked over USBT
 stayed off. Binary data can contain newline and other control bytes, so the likely cause is
 a conflict with the socket's LF-delimited command parser; this has not been proven.
 
-## TODO
-
-- Add support for selecting an arbitrary waveform file from the instrument's mass
-  storage using the SCPI `SOURce:FUNCtion:EFILe` commands.
-- Add support for configuring waveform rise and fall times.
-- Add support for configuration through environment variables.
-- Support other file formats (CSV, BIN, WFM, etc.)
-
 ## Related links
 
 - [Multicomp Pro MP750290 product page](https://www.newark.com/multicomp-pro/mp750290-us/arbitrary-waveform-generator-2ch/dp/74AH3017)
