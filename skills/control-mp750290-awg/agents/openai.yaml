@@ -1,4 +1,0 @@
-interface:
-  display_name: "Control MP750290 AWG"
-  short_description: "Safely control and test the MP750290 AWG"
-  default_prompt: "Use $control-mp750290-awg to connect to the waveform generator and safely test an arbitrary waveform."
