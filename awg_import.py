@@ -1,6 +1,6 @@
 # Copyright (c) 2026 James Lewis (james@baldengineer.com)
 # SPDX-License-Identifier: MIT
-"""Import an ArbDraw JSON waveform into an MP750290 over USBTMC."""
+"""Import an ArbDraw JSON waveform into an OWON XDG3000-family AWG over USBTMC."""
 
 from __future__ import annotations
 
@@ -51,8 +51,8 @@ def load_defaults(path: str | Path) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
-class ArbDrawWaveform:
-    """Validated ArbDraw samples and the metadata needed by the AWG."""
+class Waveform:
+    """Validated waveform samples and metadata needed by the AWG."""
 
     name: str
     waveform_type: str
@@ -104,7 +104,7 @@ def _finite_number(value: Any, field: str) -> float:
     return converted
 
 
-def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
+def load_arbdraw_json(path: str | Path) -> Waveform:
     """Read and strictly validate the authoritative ArbDraw sample array."""
     source = Path(path)
     try:
@@ -182,7 +182,7 @@ def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
     if not isinstance(waveform_type, str):
         waveform_type = "custom"
 
-    return ArbDrawWaveform(
+    return Waveform(
         name=name,
         waveform_type=waveform_type,
         values=tuple(converted_values),
@@ -193,7 +193,7 @@ def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
     )
 
 
-def encode_dab(waveform: ArbDrawWaveform) -> bytes:
+def encode_dab(waveform: Waveform) -> bytes:
     """Encode samples as verified unsigned 14-bit big-endian AWG codes."""
     span = waveform.amplitude_vpp
     codes = []
@@ -268,7 +268,7 @@ def _clear_scpi_errors(instrument: Any) -> None:
 def upload_waveform(
     resource: str,
     timeout_ms: int,
-    waveform: ArbDrawWaveform,
+    waveform: Waveform,
     payload: bytes,
     user_slot: int | None,
     channel: int,
@@ -412,7 +412,10 @@ def parse_args() -> argparse.Namespace:
     MAX_DAC_CODE = defaults["max_dac_code"]
 
     parser = argparse.ArgumentParser(
-        description="Import an ArbDraw JSON waveform into an MP750290 over USBTMC."
+        description=(
+            "Import an ArbDraw JSON waveform into an OWON XDG3000-family AWG "
+            "over USBTMC."
+        )
     )
     parser.add_argument(
         "--defaults-file",
@@ -424,7 +427,7 @@ def parse_args() -> argparse.Namespace:
         "json_file",
         type=Path,
         nargs="?",
-        help="ArbDraw .json waveform file",
+        help="ArbDraw JSON waveform file",
     )
     parser.add_argument(
         "--list-resources",

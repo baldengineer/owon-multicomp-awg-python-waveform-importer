@@ -1,4 +1,4 @@
-# MCP Arbitrary Waveform Generator CLI
+# OWON XDG3000 / MP750290 Waveform Importer
 
 Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
 (james@baldengineer.com).
@@ -11,6 +11,10 @@ The project is intended to support two operating modes:
 1. Generate binary arbitrary-waveform files for manual transfer to the instrument.
 2. Connect directly to the instrument over USBTMC or the network and control it with
    SCPI.
+
+The importer currently accepts ArbDraw JSON as its input format. The command and
+instrument-control layers are kept separate so additional formats such as CSV and WFM
+can be added later without changing the OWON XDG3000/MP750290 control path.
 
 The direct-control tools support identity queries, a point-by-point development upload,
 and fast USBTMC import of ArbDraw JSON waveforms. Imported waveforms are stored in a
@@ -50,7 +54,7 @@ later instrument-control work.
 List all detected VISA resources, one copy/paste-ready resource string per line:
 
 ```powershell
-python .\arbdraw_import.py --list-resources
+python .\awg_import.py --list-resources
 ```
 
 Use any returned string with the importer's `--resource` option.
@@ -60,7 +64,7 @@ example below uses the USBTMC resource format; use the resource returned by your
 instrument:
 
 ```powershell
-python .\arbdraw_import.py --idn "USB0::0x5345::0x1235::2025332::INSTR"
+python .\awg_import.py --idn "USB0::0x5345::0x1235::2025332::INSTR"
 ```
 
 The command prints the instrument's `*IDN?` response. Use `--visa-timeout-ms` to override
@@ -70,7 +74,7 @@ The importer requires `defaults.toml` in the working directory. Copy it or provi
 alternate configuration with `--defaults-file`:
 
 ```powershell
-python .\arbdraw_import.py --defaults-file .\my-awg.toml .\waveform.json
+python .\awg_import.py --defaults-file .\my-awg.toml .\waveform.json
 ```
 
 The TOML file is the sole source of application defaults. Command-line options override
@@ -80,7 +84,7 @@ Both discovery actions can be combined. The resource list is printed first, foll
 by the selected instrument's identity:
 
 ```powershell
-python .\arbdraw_import.py --list-resources `
+python .\awg_import.py --list-resources `
     --idn "USB0::0x5345::0x1235::2025332::INSTR"
 ```
 
@@ -137,26 +141,26 @@ python .\tools\awg_idn.py --load-test-waveform --user-slot 4
 The default is `--user-slot 0`. Values outside `0` through `31` are rejected before
 the instrument connection is opened.
 
-## Import an ArbDraw JSON waveform
+## Import a waveform
 
 Validate and preview how an ArbDraw JSON file will be encoded without contacting the
 instrument:
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --dry-run
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --dry-run
 ```
 
 Upload the waveform over USBTMC, persist it in `USER1`, and select the existing
 `EMEMory` waveform on the selected channel (channel 1 by default):
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json
 ```
 
 Channel 1 remains off by default. Enable it only after a completely successful import:
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --enable-output
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --enable-output
 ```
 
 The importer does not enable the output until waveform upload, persistent storage,
@@ -166,7 +170,7 @@ forces the selected channel off and unlocks the front panel.
 Configure channel 2 instead of the default channel 1 with `--channel`:
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
 ```
 
 Only channels `1` and `2` are accepted. Output safety, waveform selection, channel
@@ -176,7 +180,7 @@ persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
 Override the JSON-derived channel settings when needed:
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json `
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json `
     --frequency 1000 --amplitude 2.5 --offset 0.25
 ```
 
@@ -192,7 +196,7 @@ opening the instrument.
 Skip persistent user memory and leave the waveform only in volatile `EMEMory` with:
 
 ```powershell
-python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --no-persist
+python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --no-persist
 ```
 
 `--no-persist` and `--user-slot` are mutually exclusive. A no-persist waveform is lost
@@ -259,6 +263,7 @@ a conflict with the socket's LF-delimited command parser; this has not been prov
   storage using the SCPI `SOURce:FUNCtion:EFILe` commands.
 - Add support for configuring waveform rise and fall times.
 - Add support for configuration through environment variables.
+- Support other file formats (CSV, BIN, WFM, etc.)
 
 ## Related links
 
