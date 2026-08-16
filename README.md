@@ -19,8 +19,7 @@ function by default while the selected channel output remains off.
 - Instrument: Multicomp Pro MP750290
 - Compatible platform: OWON XDG3000 series
 - USBTMC VISA resource: `USB0::0x5345::0x1235::2025332::INSTR`
-- Default address: `192.168.128.29`
-- Default TCP port: `3000`
+- LAN control uses the instrument's configured IP address on TCP port `3000`.
 - SCPI command terminator: newline (`\n`)
 
 The current test instrument identifies itself as:
@@ -45,24 +44,61 @@ python -m pip install pyvisa
 The initial socket test uses only the Python standard library. PyVISA is installed for
 later instrument-control work.
 
-## Query the instrument identity
-
-Run the script with its default connection settings:
+List all detected VISA resources, one copy/paste-ready resource string per line:
 
 ```powershell
-python .\awg_idn.py
+python .\arbdraw_import.py --list-resources
 ```
 
-Override the address, port, or timeout when needed:
+Use any returned string with the importer's `--resource` option.
+
+Query the identity of any listed VISA resource by pasting its resource string. The
+example below uses the USBTMC resource format; use the resource returned by your own
+instrument:
 
 ```powershell
-python .\awg_idn.py --host 192.168.128.29 --port 3000 --timeout 5
+python .\arbdraw_import.py --idn "USB0::0x5345::0x1235::2025332::INSTR"
+```
+
+The command prints the instrument's `*IDN?` response. Use `--visa-timeout-ms` to override
+the default 60-second VISA timeout.
+
+The importer requires `defaults.toml` in the working directory. Copy it or provide an
+alternate configuration with `--defaults-file`:
+
+```powershell
+python .\arbdraw_import.py --defaults-file .\my-awg.toml .\waveform.json
+```
+
+The TOML file is the sole source of application defaults. Command-line options override
+its values, but a missing file or missing required setting causes the importer to exit.
+
+Both discovery actions can be combined. The resource list is printed first, followed
+by the selected instrument's identity:
+
+```powershell
+python .\arbdraw_import.py --list-resources `
+    --idn "USB0::0x5345::0x1235::2025332::INSTR"
+```
+
+## Query the instrument identity
+
+Run the script with its configured connection settings:
+
+```powershell
+python .\tools\awg_idn.py
+```
+
+Override the host, port, or timeout when needed:
+
+```powershell
+python .\tools\awg_idn.py --host <instrument-ip-address> --port 3000 --timeout 5
 ```
 
 Show all command-line options:
 
 ```powershell
-python .\awg_idn.py --help
+python .\tools\awg_idn.py --help
 ```
 
 The command exits with status `0` after receiving an identification response and
@@ -73,7 +109,7 @@ status `1` if the connection or query fails.
 Generate a 16-point, 1 V peak sine wave and load it into `EMEMory`:
 
 ```powershell
-python .\awg_idn.py --load-test-waveform
+python .\tools\awg_idn.py --load-test-waveform
 ```
 
 The upload uses the documented `DATA:POINts` and `DATA:DATA:VALue` commands, stores
@@ -86,13 +122,13 @@ the upload and is deliberately left off.
 The point count and peak amplitude can be changed for development:
 
 ```powershell
-python .\awg_idn.py --load-test-waveform --samples 32 --amplitude 0.5
+python .\tools\awg_idn.py --load-test-waveform --samples 32 --amplitude 0.5
 ```
 
 Choose a persistent waveform slot from `USER0` through `USER31` with `--user-slot`:
 
 ```powershell
-python .\awg_idn.py --load-test-waveform --user-slot 4
+python .\tools\awg_idn.py --load-test-waveform --user-slot 4
 ```
 
 The default is `--user-slot 0`. Values outside `0` through `31` are rejected before
@@ -104,20 +140,20 @@ Validate and preview how an ArbDraw JSON file will be encoded without contacting
 instrument:
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --dry-run
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --dry-run
 ```
 
 Upload the waveform over USBTMC, persist it in `USER1`, and select the existing
 `EMEMory` waveform on the selected channel (channel 1 by default):
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json
 ```
 
 Channel 1 remains off by default. Enable it only after a completely successful import:
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --enable-output
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --enable-output
 ```
 
 The importer does not enable the output until waveform upload, persistent storage,
@@ -127,7 +163,7 @@ forces the selected channel off and unlocks the front panel.
 Configure channel 2 instead of the default channel 1 with `--channel`:
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --channel 2
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
 ```
 
 Only channels `1` and `2` are accepted. Output safety, waveform selection, channel
@@ -137,13 +173,13 @@ persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
 Override the JSON-derived channel settings when needed:
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json `
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json `
     --frequency 1000 --amplitude 2.5 --offset 0.25
 ```
 
 Frequency is specified in hertz, amplitude in Vpp, and offset in volts. The explicit
-aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted. Omitted
-settings continue to come from the JSON metadata.
+aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted. The
+configured defaults come from `defaults.toml`; command-line values take precedence.
 
 Choose another persistent slot with `--user-slot 0..31`; an explicit slot overrides the
 channel-based default. The importer validates the schema, version, point count, finite
@@ -153,7 +189,7 @@ opening the instrument.
 Skip persistent user memory and leave the waveform only in volatile `EMEMory` with:
 
 ```powershell
-python .\arbdraw_import.py .\sample_waveform_01_funky_sine.json --no-persist
+python .\arbdraw_import.py .\examples\sample_waveform_01_funky_sine.json --no-persist
 ```
 
 `--no-persist` and `--user-slot` are mutually exclusive. A no-persist waveform is lost
@@ -161,10 +197,10 @@ when edit memory is cleared, including when the AWG is power-cycled.
 
 JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format using
 `lowVoltage` as code `0` and `highVoltage` as code `16383`. The importer configures
-the selected channel's amplitude and offset from those levels. It calculates the
-arbitrary-function record repetition rate as
-`sampleRateMSa * 1,000,000 / sampleCount`; this preserves the sample timing even when
-the JSON record contains multiple waveform cycles. The output is kept off throughout
+the selected channel's amplitude and offset from those levels. It reports
+`sampleRateMSa` as the sample rate and sets the AWG frequency from the JSON
+`frequencyHz` value, unless overridden on the command line or in `defaults.toml`. The
+output is kept off throughout
 the import. The importer locks the front panel while uploading, storing, selecting, and
 configuring the waveform, then unlocks it when finished. Its cleanup path also unlocks
 the panel if an import command fails.
@@ -234,4 +270,3 @@ modes are developed.
 
 - [Multicomp Pro MP750290 product page](https://www.newark.com/multicomp-pro/mp750290-us/arbitrary-waveform-generator-2ch/dp/74AH3017)
 - [OWON XDG3000 product page](https://www.owon.com.hk/products_owon_xdg3000_series_2-ch_250mhz_arbitrary_waveform_generator)
-- [Tektronix MSO22 MCP endpoint](http://192.168.128.241:8787/mcp)

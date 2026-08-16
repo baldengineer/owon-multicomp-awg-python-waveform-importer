@@ -11,7 +11,7 @@ MP750290/OWON XDG3000-series AWG.
 
 The tool:
 
-- connects to the AWG at the default address configured in `awg_idn.py`;
+- connects to the AWG using the client in `tools/awg_idn.py`;
 - disables channel 1 and leaves it disabled;
 - allocates the documented 100,000-point edit memory;
 - writes and verifies 100 generated sine-wave points with strict command/response

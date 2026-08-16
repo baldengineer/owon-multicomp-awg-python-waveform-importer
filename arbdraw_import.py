@@ -8,17 +8,44 @@ import math
 import struct
 import sys
 import time
+import tomllib
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
-DEFAULT_USB_RESOURCE = "USB0::0x5345::0x1235::2025332::INSTR"
-DEFAULT_TIMEOUT_MS = 60_000
-EXPECTED_IDENTITY_PREFIX = "Newark,MP750290"
-MAX_POINT_COUNT = 100_000
-MAX_DAC_CODE = 16_383
+DEFAULTS_FILE = "defaults.toml"
+EXPECTED_IDENTITY_PREFIX: str
+MAX_POINT_COUNT: int
+MAX_DAC_CODE: int
+
+
+def load_defaults(path: str | Path) -> dict[str, Any]:
+    """Load and validate the flat TOML defaults table."""
+    try:
+        with Path(path).open("rb") as stream:
+            defaults = tomllib.load(stream)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"Could not read defaults TOML: {exc}") from exc
+    if not isinstance(defaults, dict):
+        raise ValueError("Defaults TOML must contain a table")
+    required = {
+        "usb_resource",
+        "timeout_ms",
+        "expected_identity_prefix",
+        "max_point_count",
+        "max_dac_code",
+        "frequency_hz",
+        "voltage_vpp",
+        "offset_voltage",
+        "channel",
+        "enable_output",
+    }
+    missing = sorted(required - defaults.keys())
+    if missing:
+        raise ValueError(f"Defaults TOML is missing required keys: {', '.join(missing)}")
+    return defaults
 
 
 @dataclass(frozen=True)
@@ -267,7 +294,9 @@ def upload_waveform(
         instrument.write_termination = "\n"
 
         identity = _query_nonempty(instrument, "*IDN?")
-        if not identity.startswith(EXPECTED_IDENTITY_PREFIX):
+        if EXPECTED_IDENTITY_PREFIX and not identity.startswith(
+            EXPECTED_IDENTITY_PREFIX
+        ):
             raise RuntimeError(f"Unexpected instrument identity: {identity}")
 
         _clear_scpi_errors(instrument)
@@ -368,8 +397,26 @@ def upload_waveform(
 
 
 def parse_args() -> argparse.Namespace:
+    global EXPECTED_IDENTITY_PREFIX, MAX_POINT_COUNT, MAX_DAC_CODE
+    defaults_parser = argparse.ArgumentParser(add_help=False)
+    defaults_parser.add_argument("--defaults-file", type=Path, default=DEFAULTS_FILE)
+    defaults_args, _ = defaults_parser.parse_known_args()
+    try:
+        defaults = load_defaults(defaults_args.defaults_file)
+    except ValueError as exc:
+        defaults_parser.error(str(exc))
+    EXPECTED_IDENTITY_PREFIX = defaults["expected_identity_prefix"]
+    MAX_POINT_COUNT = defaults["max_point_count"]
+    MAX_DAC_CODE = defaults["max_dac_code"]
+
     parser = argparse.ArgumentParser(
         description="Import an ArbDraw JSON waveform into an MP750290 over USBTMC."
+    )
+    parser.add_argument(
+        "--defaults-file",
+        type=Path,
+        default=defaults_args.defaults_file,
+        help=f"TOML defaults file (default: {DEFAULTS_FILE})",
     )
     parser.add_argument(
         "json_file",
@@ -389,14 +436,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--resource",
-        default=DEFAULT_USB_RESOURCE,
-        help=f"VISA resource (default: {DEFAULT_USB_RESOURCE})",
+        default=defaults["usb_resource"],
+        help="VISA resource",
     )
     parser.add_argument(
         "--visa-timeout-ms",
         type=int,
-        default=DEFAULT_TIMEOUT_MS,
-        help=f"VISA timeout in milliseconds (default: {DEFAULT_TIMEOUT_MS})",
+        default=defaults["timeout_ms"],
+        help="VISA timeout in milliseconds",
     )
     persistence_group = parser.add_mutually_exclusive_group()
     persistence_group.add_argument(
@@ -415,8 +462,8 @@ def parse_args() -> argparse.Namespace:
         "--channel",
         type=int,
         choices=(1, 2),
-        default=1,
-        help="AWG output channel to configure (default: 1)",
+        default=defaults["channel"],
+        help="AWG output channel to configure",
     )
     parser.add_argument(
         "--dry-run",
@@ -425,7 +472,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--enable-output",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=defaults["enable_output"],
         help="leave the selected channel enabled after a completely successful import",
     )
     parser.add_argument(
@@ -433,13 +481,15 @@ def parse_args() -> argparse.Namespace:
         "--frequency-hz",
         dest="frequency_hz",
         type=float,
-        help="override the JSON-derived record repetition frequency in Hz",
+        default=defaults["frequency_hz"],
+        help="override the JSON frequencyHz value in Hz",
     )
     parser.add_argument(
         "--amplitude",
         "--amplitude-vpp",
         dest="amplitude_vpp",
         type=float,
+        default=defaults["voltage_vpp"],
         help="override the JSON-derived channel amplitude in Vpp",
     )
     parser.add_argument(
@@ -447,6 +497,7 @@ def parse_args() -> argparse.Namespace:
         "--offset-v",
         dest="offset_voltage",
         type=float,
+        default=defaults["offset_voltage"],
         help="override the JSON-derived channel offset in volts",
     )
     return parser.parse_args()
