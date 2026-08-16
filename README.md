@@ -283,7 +283,6 @@ DATA:DATA EMEMory,#42000<2000 bytes of waveform data>
 ```
 
 
-
 ## Related links
 
 - [Multicomp Pro MP750290 product page](https://www.newark.com/multicomp-pro/mp750290-us/arbitrary-waveform-generator-2ch/dp/74AH3017)
