@@ -1,3 +1,5 @@
+# Copyright (c) 2026 James Lewis (james@baldengineer.com)
+# SPDX-License-Identifier: MIT
 """Stress-test the AWG edit-memory point limit without enabling its output."""
 
 from __future__ import annotations

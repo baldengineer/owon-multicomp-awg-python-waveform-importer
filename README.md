@@ -1,5 +1,8 @@
 # MCP Arbitrary Waveform Generator CLI
 
+Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
+(james@baldengineer.com).
+
 Command-line tools for working with the Multicomp Pro MP750290 arbitrary waveform
 generator, a rebadged OWON XDG3000-series instrument.
 
@@ -249,15 +252,6 @@ accept the same binary block reliably. A 1,000-point block that worked over USBT
 `-101,"Invalid character"` over LAN, although the AWG remained responsive and channel 1
 stayed off. Binary data can contain newline and other control bytes, so the likely cause is
 a conflict with the socket's LF-delimited command parser; this has not been proven.
-
-## Reference material
-
-The local `datasheets/` directory contains the XDG3000 SCPI programmer's manual used
-to identify supported commands. That directory is intentionally excluded from Git.
-
-The ignored `old code/` directory contains an earlier CSV-to-binary waveform converter
-and exploratory PyVISA control code. It will serve as a reference while the two CLI
-modes are developed.
 
 ## TODO
 

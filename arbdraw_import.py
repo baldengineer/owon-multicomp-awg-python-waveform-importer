@@ -1,3 +1,5 @@
+# Copyright (c) 2026 James Lewis (james@baldengineer.com)
+# SPDX-License-Identifier: MIT
 """Import an ArbDraw JSON waveform into an MP750290 over USBTMC."""
 
 from __future__ import annotations

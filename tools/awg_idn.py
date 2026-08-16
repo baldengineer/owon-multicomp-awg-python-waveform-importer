@@ -1,3 +1,5 @@
+# Copyright (c) 2026 James Lewis (james@baldengineer.com)
+# SPDX-License-Identifier: MIT
 """Develop SCPI control for an OWON XDG3000-compatible waveform generator."""
 
 from __future__ import annotations

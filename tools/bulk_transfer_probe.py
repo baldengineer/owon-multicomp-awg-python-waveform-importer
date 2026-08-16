@@ -1,3 +1,5 @@
+# Copyright (c) 2026 James Lewis (james@baldengineer.com)
+# SPDX-License-Identifier: MIT
 """Test the AWG's undocumented bulk waveform encoding."""
 
 from __future__ import annotations
