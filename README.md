@@ -1,8 +1,4 @@
 # OWON XDG3000 / MP750290 Waveform Importer
-
-Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
-(james@baldengineer.com).
-
 Command-line tools for working with the Multicomp Pro MP750290 arbitrary waveform
 generator, a rebadged OWON XDG3000-series instrument.
 
@@ -23,33 +19,82 @@ function by default while the selected channel output remains off.
 
 ## Hardware and connection
 
-- Instrument: Multicomp Pro MP750290
-- Compatible platform: OWON XDG3000 series
-- USBTMC VISA resource: `USB0::0x5345::0x1235::2025332::INSTR`
+- Instrument: Multicomp Pro MP750290 or OWON XDG3000 series
+- MP75's USBTMC VISA resource: `USB0::0x5345::0x1235::2025332::INSTR`
 - LAN control uses the instrument's configured IP address on TCP port `3000`.
 - SCPI command terminator: newline (`\n`)
 
 The current test instrument identifies itself as:
-
 ```text
 Newark,MP750290,2025332,SCPI:99.0 FV:V2.7.0
-```
 
-Channel 1 of the waveform generator is connected to channel 1 of a Tektronix MSO22
-for development and verification.
+```
+### USBTMC versus LAN
+
+```Use USBTMC for bulk binary waveform uploads. The verified format successfully transferred```
+
+USBTMC supports up to 100,000 waveform points.
+
+Uploads over LAN will fail!
+
+The raw TCP connection at port `3000` works for ASCII SCPI, including identity queries,
+output control, memory allocation, and carefully paced point-by-point writes. It does not
+accept the same binary block reliably. A 1,000-point block that worked over USBTMC returned
+`-101,"Invalid character"` over LAN, although the AWG remained responsive and channel 1
+stayed off. Binary data can contain newline and other control bytes, so the likely cause is
+a conflict with the socket's LF-delimited command parser; this has not been proven.
 
 ## Setup
 
-Create and activate a virtual environment, then install the project dependency:
+Install Python 3.11 or newer, then open a terminal in the repository root. Create the
+project virtual environment with:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install pyvisa
 ```
 
-The initial socket test uses only the Python standard library. PyVISA is installed for
-later instrument-control work.
+Activate it in Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks the activation script, allow locally created scripts for your user
+account and activate the environment again:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+For Windows Command Prompt, use:
+
+```bat
+.venv\Scripts\activate.bat
+```
+
+For macOS or Linux, use:
+
+```bash
+source .venv/bin/activate
+```
+
+When activation succeeds, the terminal prompt normally starts with `(.venv)`. Install
+the project dependencies after activation:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+To leave the virtual environment when finished, run:
+
+```text
+deactivate
+```
+
+The initial socket test uses only the Python standard library. The requirements file
+installs PyVISA for instrument-control work over USBTMC. PyVISA also requires a VISA
+backend on the host system; install and configure the vendor's VISA implementation
+before using USBTMC resource discovery or waveform uploads.
 
 List all detected VISA resources, one copy/paste-ready resource string per line:
 
@@ -150,22 +195,21 @@ instrument:
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --dry-run
 ```
 
-Upload the waveform over USBTMC, persist it in `USER1`, and select the existing
+Upload the waveform, persist it in `USER1`, and select the existing
 `EMEMory` waveform on the selected channel (channel 1 by default):
 
 ```powershell
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json
 ```
 
-Channel 1 remains off by default. Enable it only after a completely successful import:
+Channel 1 remains off by default. To enable it, only after a completely successful import:
 
 ```powershell
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --enable-output
 ```
 
-The importer does not enable the output until waveform upload, persistent storage,
-waveform selection, and channel configuration have all succeeded. Any failure still
-forces the selected channel off and unlocks the front panel.
+The importeronly turns channel output on if waveform upload, persistent storage,
+waveform selection, and channel configuration have all succeeded.
 
 Configure channel 2 instead of the default channel 1 with `--channel`:
 
@@ -173,9 +217,9 @@ Configure channel 2 instead of the default channel 1 with `--channel`:
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
 ```
 
-Only channels `1` and `2` are accepted. Output safety, waveform selection, channel
-settings, final output state, and cleanup all apply to the selected channel. The default
-persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
+Only channels `1` and `2` are accepted.
+
+The default persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
 
 Override the JSON-derived channel settings when needed:
 
@@ -184,8 +228,8 @@ python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json `
     --frequency 1000 --amplitude 2.5 --offset 0.25
 ```
 
-Frequency is specified in hertz, amplitude in Vpp, and offset in volts. The explicit
-aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted. The
+Frequency is specified in hertz, amplitude in Vpp, and offset in volts. (Explicit
+aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted.) The
 configured defaults come from `defaults.toml`; command-line values take precedence.
 
 Choose another persistent slot with `--user-slot 0..31`; an explicit slot overrides the
@@ -207,8 +251,7 @@ JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format us
 the selected channel's amplitude and offset from those levels. It reports
 `sampleRateMSa` as the sample rate and sets the AWG frequency from the JSON
 `frequencyHz` value, unless overridden on the command line or in `defaults.toml`. The
-output is kept off throughout
-the import. The importer locks the front panel while uploading, storing, selecting, and
+output is kept off throughout the import. The importer locks the front panel while uploading, storing, selecting, and
 configuring the waveform, then unlocks it when finished. Its cleanup path also unlocks
 the panel if an import command fails.
 
@@ -239,33 +282,12 @@ DATA:POINts EMEMory,1000
 DATA:DATA EMEMory,#42000<2000 bytes of waveform data>
 ```
 
-This format was verified over USBTMC with a 1,000-point sine wave. The AWG's front-panel
-preview showed the expected waveform. On the tested firmware, individual ASCII point
-queries returned misleading zeros after a bulk upload, so use the SCPI error queue and
-point count together with the front-panel preview or an oscilloscope for verification.
 
-### USBTMC versus LAN
-
-Use USBTMC for bulk binary waveform uploads. The verified format successfully transferred
-1,000-, 10,000-, and 100,000-point waveforms over USBTMC; 100,000 points is the confirmed
-edit-memory limit on firmware `FV:V2.7.0`.
-
-The raw TCP connection at port `3000` works for ASCII SCPI, including identity queries,
-output control, memory allocation, and carefully paced point-by-point writes. It does not
-accept the same binary block reliably. A 1,000-point block that worked over USBTMC returned
-`-101,"Invalid character"` over LAN, although the AWG remained responsive and channel 1
-stayed off. Binary data can contain newline and other control bytes, so the likely cause is
-a conflict with the socket's LF-delimited command parser; this has not been proven.
-
-## TODO
-
-- Add support for selecting an arbitrary waveform file from the instrument's mass
-  storage using the SCPI `SOURce:FUNCtion:EFILe` commands.
-- Add support for configuring waveform rise and fall times.
-- Add support for configuration through environment variables.
-- Support other file formats (CSV, BIN, WFM, etc.)
 
 ## Related links
 
 - [Multicomp Pro MP750290 product page](https://www.newark.com/multicomp-pro/mp750290-us/arbitrary-waveform-generator-2ch/dp/74AH3017)
 - [OWON XDG3000 product page](https://www.owon.com.hk/products_owon_xdg3000_series_2-ch_250mhz_arbitrary_waveform_generator)
+
+Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
+(james@baldengineer.com).
