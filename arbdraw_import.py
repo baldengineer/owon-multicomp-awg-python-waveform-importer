@@ -31,6 +31,7 @@ class ArbDrawWaveform:
     low_voltage: float
     high_voltage: float
     sample_rate_sa: float
+    frequency_hz: float
 
     @property
     def sample_count(self) -> int:
@@ -44,11 +45,21 @@ class ArbDrawWaveform:
     def offset_voltage(self) -> float:
         return (self.high_voltage + self.low_voltage) / 2.0
 
-    @property
-    def repetition_frequency_hz(self) -> float:
-        # One pass through edit memory is one arbitrary-function period. A JSON file
-        # can contain multiple cycles, so this may differ from waveform.frequencyHz.
-        return self.sample_rate_sa / self.sample_count
+def list_visa_resources() -> tuple[str, ...]:
+    """Return detected VISA resource strings in backend-provided order."""
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is required to list VISA resources") from exc
+
+    try:
+        resource_manager = pyvisa.ResourceManager()
+        try:
+            return tuple(resource_manager.list_resources())
+        finally:
+            resource_manager.close()
+    except Exception as exc:
+        raise RuntimeError(f"VISA backend error: {exc}") from exc
 
 
 def _finite_number(value: Any, field: str) -> float:
@@ -129,6 +140,12 @@ def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
     if sample_rate_msa <= 0:
         raise ValueError("waveform.sampleRateMSa must be greater than zero")
 
+    frequency_hz = _finite_number(
+        waveform.get("frequencyHz"), "waveform.frequencyHz"
+    )
+    if frequency_hz <= 0:
+        raise ValueError("waveform.frequencyHz must be greater than zero")
+
     name = project.get("name", "Imported waveform")
     if not isinstance(name, str):
         name = str(name)
@@ -143,6 +160,7 @@ def load_arbdraw_json(path: str | Path) -> ArbDrawWaveform:
         low_voltage=low_voltage,
         high_voltage=high_voltage,
         sample_rate_sa=sample_rate_msa * 1_000_000.0,
+        frequency_hz=frequency_hz,
     )
 
 
@@ -178,6 +196,30 @@ def _query_nonempty(instrument: Any, command: str) -> str:
             return response
         time.sleep(0.25)
     raise RuntimeError(f"Instrument returned an empty response to {command}")
+
+
+def query_visa_identity(resource: str, timeout_ms: int) -> str:
+    """Open one VISA resource and return its response to ``*IDN?``."""
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is required to query a VISA resource") from exc
+
+    try:
+        resource_manager = pyvisa.ResourceManager()
+        instrument = None
+        try:
+            instrument = resource_manager.open_resource(resource)
+            instrument.timeout = timeout_ms
+            instrument.read_termination = "\n"
+            instrument.write_termination = "\n"
+            return _query_nonempty(instrument, "*IDN?")
+        finally:
+            if instrument is not None:
+                instrument.close()
+            resource_manager.close()
+    except Exception as exc:
+        raise RuntimeError(f"VISA communication error: {exc}") from exc
 
 
 def _require_no_scpi_error(instrument: Any, stage: str) -> str:
@@ -329,14 +371,29 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Import an ArbDraw JSON waveform into an MP750290 over USBTMC."
     )
-    parser.add_argument("json_file", type=Path, help="ArbDraw .json waveform file")
+    parser.add_argument(
+        "json_file",
+        type=Path,
+        nargs="?",
+        help="ArbDraw .json waveform file",
+    )
+    parser.add_argument(
+        "--list-resources",
+        action="store_true",
+        help="list detected VISA resource strings, one per line",
+    )
+    parser.add_argument(
+        "--idn",
+        metavar="RESOURCE",
+        help="query *IDN? on the given VISA resource after optional discovery",
+    )
     parser.add_argument(
         "--resource",
         default=DEFAULT_USB_RESOURCE,
         help=f"VISA resource (default: {DEFAULT_USB_RESOURCE})",
     )
     parser.add_argument(
-        "--timeout-ms",
+        "--visa-timeout-ms",
         type=int,
         default=DEFAULT_TIMEOUT_MS,
         help=f"VISA timeout in milliseconds (default: {DEFAULT_TIMEOUT_MS})",
@@ -397,8 +454,44 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.timeout_ms <= 0:
-        print("--timeout-ms must be greater than zero", file=sys.stderr)
+    if (args.list_resources or args.idn is not None) and args.json_file is not None:
+        print(
+            "Do not provide a JSON file with --list-resources or --idn",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.list_resources:
+        try:
+            resources = list_visa_resources()
+        except (RuntimeError, OSError) as exc:
+            print(f"Could not list VISA resources: {exc}", file=sys.stderr)
+            return 1
+        if not resources:
+            print("No VISA resources found", file=sys.stderr)
+        else:
+            print(*resources, sep="\n")
+
+    if args.idn is not None:
+        if args.visa_timeout_ms <= 0:
+            print("--visa-timeout-ms must be greater than zero", file=sys.stderr)
+            return 2
+        try:
+            print(query_visa_identity(args.idn, args.visa_timeout_ms))
+        except RuntimeError as exc:
+            print(f"Could not query VISA resource: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.list_resources:
+        return 0
+
+    if args.json_file is None:
+        print("A JSON waveform file is required", file=sys.stderr)
+        return 2
+
+    if args.visa_timeout_ms <= 0:
+        print("--visa-timeout-ms must be greater than zero", file=sys.stderr)
         return 2
     if args.frequency_hz is not None and (
         not math.isfinite(args.frequency_hz) or args.frequency_hz <= 0
@@ -429,7 +522,7 @@ def main() -> int:
             else args.offset_voltage
         )
         frequency_hz = (
-            waveform.repetition_frequency_hz
+            waveform.frequency_hz
             if args.frequency_hz is None
             else args.frequency_hz
         )
@@ -452,7 +545,8 @@ def main() -> int:
         )
         print(f"Amplitude: {amplitude_vpp:g} Vpp")
         print(f"Offset: {offset_voltage:g} V")
-        print(f"Record repetition: {frequency_hz:g} Hz")
+        print(f"Sample rate: {waveform.sample_rate_sa / 1_000_000:g} MSa/s")
+        print(f"Frequency: {frequency_hz:g} Hz")
 
         if args.dry_run:
             print("Dry run complete; the instrument was not contacted")
@@ -460,7 +554,7 @@ def main() -> int:
 
         result = upload_waveform(
             args.resource,
-            args.timeout_ms,
+            args.visa_timeout_ms,
             waveform,
             payload,
             user_slot,
