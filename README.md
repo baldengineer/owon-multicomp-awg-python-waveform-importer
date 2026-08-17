@@ -82,6 +82,16 @@ the project dependencies after activation:
 python -m pip install -r requirements.txt
 ```
 
+Launch the terminal UI with:
+
+```powershell
+python .\tui.py
+```
+
+It loads `defaults.toml` by default; other TOML profiles in the project directory
+are available from the profile dropdown. The UI exposes all configuration keys,
+VISA resource refresh and `*IDN?`, waveform-file sending, and a console at the bottom.
+
 To leave the virtual environment when finished, run:
 
 ```text
@@ -111,6 +121,13 @@ python .\awg_import.py --idn "USB0::0x5345::0x1235::2025332::INSTR"
 
 The command prints the instrument's `*IDN?` response. Use `--visa-timeout-ms` to override
 the default 60-second VISA timeout.
+
+Send only an output state command to a selected channel without loading a waveform:
+
+```powershell
+python .\awg_import.py --resource "USB0::0x5345::0x1235::2025332::INSTR" --channel 1 --output on
+python .\awg_import.py --resource "USB0::0x5345::0x1235::2025332::INSTR" --channel 1 --output off
+```
 
 The importer requires `defaults.toml` in the working directory. Copy it or provide an
 alternate configuration with `--defaults-file`:

@@ -335,6 +335,30 @@ def query_visa_identity(resource: str, timeout_ms: int) -> str:
         raise RuntimeError(f"VISA communication error: {exc}") from exc
 
 
+def set_output_state(resource: str, timeout_ms: int, channel: int, enabled: bool) -> None:
+    """Send only the channel output command to a VISA resource."""
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is required to control a VISA resource") from exc
+
+    resource_manager = None
+    instrument = None
+    try:
+        resource_manager = pyvisa.ResourceManager()
+        instrument = resource_manager.open_resource(resource)
+        instrument.timeout = timeout_ms
+        instrument.write_termination = "\n"
+        instrument.write(f"OUTP{channel} {'ON' if enabled else 'OFF'}")
+    except Exception as exc:
+        raise RuntimeError(f"VISA output control error: {exc}") from exc
+    finally:
+        if instrument is not None:
+            instrument.close()
+        if resource_manager is not None:
+            resource_manager.close()
+
+
 def _require_no_scpi_error(instrument: Any, stage: str) -> str:
     status = _query_nonempty(instrument, "SYSTem:ERRor:NEXT?")
     if not status.lstrip().startswith("0"):
@@ -537,6 +561,11 @@ def parse_args() -> argparse.Namespace:
         help="query *IDN? on the given VISA resource after optional discovery",
     )
     parser.add_argument(
+        "--output",
+        choices=("on", "off"),
+        help="send only an output state command to --channel",
+    )
+    parser.add_argument(
         "--resource",
         default=defaults["usb_resource"],
         help="VISA resource",
@@ -607,9 +636,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if (args.list_resources or args.idn is not None) and args.waveform_file is not None:
+    if (args.list_resources or args.idn is not None or args.output is not None) and args.waveform_file is not None:
         print(
-            "Do not provide a waveform file with --list-resources or --idn",
+            "Do not provide a waveform file with --list-resources, --idn, or --output",
             file=sys.stderr,
         )
         return 2
@@ -637,6 +666,23 @@ def main() -> int:
         return 0
 
     if args.list_resources:
+        return 0
+
+    if args.output is not None:
+        if args.visa_timeout_ms <= 0:
+            print("--visa-timeout-ms must be greater than zero", file=sys.stderr)
+            return 2
+        try:
+            set_output_state(
+                args.resource,
+                args.visa_timeout_ms,
+                args.channel,
+                args.output == "on",
+            )
+        except RuntimeError as exc:
+            print(f"Could not set channel {args.channel} output: {exc}", file=sys.stderr)
+            return 1
+        print(f"Channel {args.channel} output: {args.output.upper()}")
         return 0
 
     if args.waveform_file is None:
