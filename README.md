@@ -2,15 +2,10 @@
 Command-line tools for working with the Multicomp Pro MP750290 arbitrary waveform
 generator, a rebadged OWON XDG3000-series instrument.
 
-The project is intended to support two operating modes:
+The python project connects to the instrument via pyVISA using USBTMC or the network and control it with SCPI.
 
-1. Generate binary arbitrary-waveform files for manual transfer to the instrument.
-2. Connect directly to the instrument over USBTMC or the network and control it with
-   SCPI.
-
-The importer currently accepts ArbDraw JSON as its input format. The command and
-instrument-control layers are kept separate so additional formats such as CSV and WFM
-can be added later without changing the OWON XDG3000/MP750290 control path.
+The importer accepts ArbDraw JSON and headerless two-column `x,y` CSV files, where `x`
+is time in seconds and `y` is voltage in volts. 
 
 The direct-control tools support identity queries, a point-by-point development upload,
 and fast USBTMC import of ArbDraw JSON waveforms. Imported waveforms are stored in a
@@ -194,6 +189,23 @@ instrument:
 ```powershell
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --dry-run
 ```
+
+CSV files normally use exactly two columns (`x,y`) with no header. The `x` values are timestamps
+in seconds and the `y` values are voltages in volts; timestamps must be strictly
+increasing and uniformly spaced. Single-column CSV files are also accepted; each row is
+treated as a voltage sample and its `x` position is generated from the sample index.
+Use `--csv-column INDEX` to select a voltage column from a wider CSV, and
+`--csv-delimiter CHAR` for a delimiter other than comma. CSV files may contain up to
+100,000 points. Validate or upload one exactly like an ArbDraw JSON file:
+
+```powershell
+python .\awg_import.py .\examples\hello_world_56700.csv --dry-run
+```
+
+For CSV input, the importer derives sample rate from timestamp spacing, voltage range
+from the samples, and repetition frequency from the full record length. Settings in
+`defaults.toml` and command-line overrides continue to take precedence for channel
+frequency, amplitude, and offset.
 
 Upload the waveform, persist it in `USER1`, and select the existing
 `EMEMory` waveform on the selected channel (channel 1 by default):

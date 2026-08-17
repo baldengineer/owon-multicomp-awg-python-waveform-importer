@@ -1,10 +1,11 @@
 # Copyright (c) 2026 James Lewis (james@baldengineer.com)
 # SPDX-License-Identifier: MIT
-"""Import an ArbDraw JSON waveform into an OWON XDG3000-family AWG over USBTMC."""
+"""Import JSON or CSV waveform samples into an OWON XDG3000-family AWG."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import struct
@@ -191,6 +192,88 @@ def load_arbdraw_json(path: str | Path) -> Waveform:
         sample_rate_sa=sample_rate_msa * 1_000_000.0,
         frequency_hz=frequency_hz,
     )
+
+
+def load_csv(
+    path: str | Path, *, delimiter: str = ",", value_column: int | None = None
+) -> Waveform:
+    """Load a headerless CSV waveform, optionally selecting its voltage column."""
+    source = Path(path)
+    if len(delimiter) != 1:
+        raise ValueError("CSV delimiter must be exactly one character")
+    if value_column is not None and value_column < 0:
+        raise ValueError("CSV value column must be zero or greater")
+    times: list[float] = []
+    values: list[float] = []
+    try:
+        with source.open("r", encoding="utf-8-sig", newline="") as stream:
+            for row_number, row in enumerate(
+                csv.reader(stream, delimiter=delimiter), start=1
+            ):
+                if not row or all(not cell.strip() for cell in row):
+                    continue
+                if value_column is None and len(row) == 1:
+                    selected_column = 0
+                    time_value = len(values)
+                elif value_column is None and len(row) == 2:
+                    selected_column = 1
+                    time_value = row[0].strip()
+                elif value_column is not None and value_column < len(row):
+                    selected_column = value_column
+                    time_value = len(values)
+                else:
+                    raise ValueError(
+                        f"CSV row {row_number} has no column {value_column}"
+                    )
+                times.append(
+                    _finite_number(time_value, f"CSV row {row_number} time")
+                )
+                values.append(
+                    _finite_number(
+                        row[selected_column].strip(), f"CSV row {row_number} voltage"
+                    )
+                )
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ValueError(f"Could not read CSV: {exc}") from exc
+
+    if not 2 <= len(values) <= MAX_POINT_COUNT:
+        raise ValueError(f"CSV must contain 2 through {MAX_POINT_COUNT} samples")
+
+    intervals = [later - earlier for earlier, later in zip(times, times[1:])]
+    if any(interval <= 0 for interval in intervals):
+        raise ValueError("CSV timestamps must be strictly increasing")
+    interval = sum(intervals) / len(intervals)
+    tolerance = max(abs(interval) * 1e-6, 1e-15)
+    if any(abs(candidate - interval) > tolerance for candidate in intervals):
+        raise ValueError("CSV timestamps must be uniformly spaced")
+
+    low_voltage = min(values)
+    high_voltage = max(values)
+    if high_voltage <= low_voltage:
+        raise ValueError("CSV voltages must span more than one value")
+    sample_rate_sa = 1.0 / interval
+
+    return Waveform(
+        name=source.stem,
+        waveform_type="csv",
+        values=tuple(values),
+        low_voltage=low_voltage,
+        high_voltage=high_voltage,
+        sample_rate_sa=sample_rate_sa,
+        frequency_hz=sample_rate_sa / len(values),
+    )
+
+
+def load_waveform(
+    path: str | Path, *, csv_delimiter: str = ",", csv_value_column: int | None = None
+) -> Waveform:
+    """Load a waveform according to its filename extension."""
+    source = Path(path)
+    if source.suffix.lower() == ".csv":
+        return load_csv(
+            source, delimiter=csv_delimiter, value_column=csv_value_column
+        )
+    return load_arbdraw_json(source)
 
 
 def encode_dab(waveform: Waveform) -> bytes:
@@ -413,7 +496,8 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Import an ArbDraw JSON waveform into an OWON XDG3000-family AWG "
+            "Import an ArbDraw JSON or headerless x,y CSV waveform into an OWON "
+            "XDG3000-family AWG "
             "over USBTMC."
         )
     )
@@ -424,10 +508,22 @@ def parse_args() -> argparse.Namespace:
         help=f"TOML defaults file (default: {DEFAULTS_FILE})",
     )
     parser.add_argument(
-        "json_file",
+        "waveform_file",
         type=Path,
         nargs="?",
-        help="ArbDraw JSON waveform file",
+        help="ArbDraw JSON or headerless x,y CSV (x seconds, y volts) waveform file",
+    )
+    parser.add_argument(
+        "--csv-delimiter",
+        default=",",
+        help="CSV field delimiter (default: comma)",
+    )
+    parser.add_argument(
+        "--csv-column",
+        dest="csv_value_column",
+        type=int,
+        metavar="INDEX",
+        help="zero-based CSV voltage column; single-column CSVs use column 0",
     )
     parser.add_argument(
         "--list-resources",
@@ -510,9 +606,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if (args.list_resources or args.idn is not None) and args.json_file is not None:
+    if (args.list_resources or args.idn is not None) and args.waveform_file is not None:
         print(
-            "Do not provide a JSON file with --list-resources or --idn",
+            "Do not provide a waveform file with --list-resources or --idn",
             file=sys.stderr,
         )
         return 2
@@ -542,8 +638,8 @@ def main() -> int:
     if args.list_resources:
         return 0
 
-    if args.json_file is None:
-        print("A JSON waveform file is required", file=sys.stderr)
+    if args.waveform_file is None:
+        print("A waveform file is required", file=sys.stderr)
         return 2
 
     if args.visa_timeout_ms <= 0:
@@ -564,7 +660,11 @@ def main() -> int:
         return 2
 
     try:
-        waveform = load_arbdraw_json(args.json_file)
+        waveform = load_waveform(
+            args.waveform_file,
+            csv_delimiter=args.csv_delimiter,
+            csv_value_column=args.csv_value_column,
+        )
         payload = encode_dab(waveform)
         block = make_ieee_block(payload)
         amplitude_vpp = (
