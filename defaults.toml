@@ -10,3 +10,4 @@ voltage_vpp = 1.0
 offset_voltage = 0.0
 channel = 1
 enable_output = false
+persist = true

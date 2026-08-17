@@ -44,6 +44,7 @@ def load_defaults(path: str | Path) -> dict[str, Any]:
         "offset_voltage",
         "channel",
         "enable_output",
+        "persist",
     }
     missing = sorted(required - defaults.keys())
     if missing:
@@ -546,18 +547,18 @@ def parse_args() -> argparse.Namespace:
         default=defaults["timeout_ms"],
         help="VISA timeout in milliseconds",
     )
-    persistence_group = parser.add_mutually_exclusive_group()
-    persistence_group.add_argument(
+    parser.add_argument(
+        "--persist",
+        action=argparse.BooleanOptionalAction,
+        default=defaults["persist"],
+        help="copy the waveform into persistent USER memory (default: defaults.toml)",
+    )
+    parser.add_argument(
         "--user-slot",
         type=int,
         choices=range(32),
         metavar="0..31",
-        help="persistent USER memory slot (default: channel 1 -> 1, channel 2 -> 2)",
-    )
-    persistence_group.add_argument(
-        "--no-persist",
-        action="store_true",
-        help="leave the waveform only in volatile edit memory",
+        help="persistent USER memory slot; requires --persist (default: channel-based)",
     )
     parser.add_argument(
         "--channel",
@@ -658,6 +659,12 @@ def main() -> int:
     if args.offset_voltage is not None and not math.isfinite(args.offset_voltage):
         print("--offset must be a finite number", file=sys.stderr)
         return 2
+    if args.csv_value_column is not None and args.csv_value_column < 0:
+        print("--csv-column must be zero or greater", file=sys.stderr)
+        return 2
+    if args.user_slot is not None and not args.persist:
+        print("--user-slot requires --persist", file=sys.stderr)
+        return 2
 
     try:
         waveform = load_waveform(
@@ -683,10 +690,8 @@ def main() -> int:
             else args.frequency_hz
         )
         user_slot = (
-            None
-            if args.no_persist
-            else (args.channel if args.user_slot is None else args.user_slot)
-        )
+            args.channel if args.user_slot is None else args.user_slot
+        ) if args.persist else None
 
         print(f"Name: {waveform.name}")
         print(f"Type: {waveform.waveform_type}")

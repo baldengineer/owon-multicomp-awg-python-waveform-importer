@@ -8,9 +8,11 @@ The importer accepts ArbDraw JSON and headerless two-column `x,y` CSV files, whe
 is time in seconds and `y` is voltage in volts. 
 
 The direct-control tools support identity queries, a point-by-point development upload,
-and fast USBTMC import of ArbDraw JSON waveforms. Imported waveforms are stored in a
-selectable persistent `USER` slot, retained in edit memory, and selected as the channel 1
-function by default while the selected channel output remains off.
+and fast USBTMC import of ArbDraw JSON and CSV waveforms. Imported waveforms are
+Persistence is controlled by `defaults.toml` (`persist = true` currently); use
+`--persist` or `--no-persist` to override it for an individual import. Persistent
+waveforms are copied into a selectable `USER` slot, while non-persistent imports stay
+in volatile edit memory. The selected channel output remains off by default.
 
 ## Hardware and connection
 
@@ -120,6 +122,12 @@ python .\awg_import.py --defaults-file .\my-awg.toml .\waveform.json
 The TOML file is the sole source of application defaults. Command-line options override
 its values, but a missing file or missing required setting causes the importer to exit.
 
+## TODO
+
+- Add support for saving user-specific settings in a local TOML file under the user's
+  home directory, with those settings layered over the project `defaults.toml` without
+  modifying the repository defaults.
+
 Both discovery actions can be combined. The resource list is printed first, followed
 by the selected instrument's identity:
 
@@ -207,8 +215,8 @@ from the samples, and repetition frequency from the full record length. Settings
 `defaults.toml` and command-line overrides continue to take precedence for channel
 frequency, amplitude, and offset.
 
-Upload the waveform, persist it in `USER1`, and select the existing
-`EMEMory` waveform on the selected channel (channel 1 by default):
+Upload the waveform to volatile `EMEMory` and select it on the selected channel
+(channel 1 by default):
 
 ```powershell
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json
@@ -220,8 +228,9 @@ Channel 1 remains off by default. To enable it, only after a completely successf
 python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --enable-output
 ```
 
-The importeronly turns channel output on if waveform upload, persistent storage,
-waveform selection, and channel configuration have all succeeded.
+The importer only turns channel output on if waveform upload, waveform selection, and
+channel configuration have all succeeded. When `--persist` is used, persistent storage
+must also succeed before output is enabled.
 
 Configure channel 2 instead of the default channel 1 with `--channel`:
 
@@ -231,7 +240,9 @@ python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
 
 Only channels `1` and `2` are accepted.
 
-The default persistent destination is `USER1` for channel 1 and `USER2` for channel 2.
+Use `--persist` to enable persistent storage (or set `persist = true` in
+`defaults.toml`). Its default destination is `USER1` for channel 1 and `USER2` for
+channel 2.
 
 Override the JSON-derived channel settings when needed:
 
@@ -244,19 +255,14 @@ Frequency is specified in hertz, amplitude in Vpp, and offset in volts. (Explici
 aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted.) The
 configured defaults come from `defaults.toml`; command-line values take precedence.
 
-Choose another persistent slot with `--user-slot 0..31`; an explicit slot overrides the
-channel-based default. The importer validates the schema, version, point count, finite
-sample values, declared voltage range, and the 100,000-point hardware limit before
-opening the instrument.
+Choose another persistent slot with `--persist --user-slot 0..31`; an explicit slot
+overrides the channel-based default. The importer validates the schema, version, point
+count, finite sample values, declared voltage range, and the 100,000-point hardware
+limit before opening the instrument.
 
-Skip persistent user memory and leave the waveform only in volatile `EMEMory` with:
-
-```powershell
-python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --no-persist
-```
-
-`--no-persist` and `--user-slot` are mutually exclusive. A no-persist waveform is lost
-when edit memory is cleared, including when the AWG is power-cycled.
+`--user-slot` requires persistence to be enabled. Use `--no-persist` to leave a
+waveform only in volatile `EMEMory`; it is lost when edit memory is cleared, including
+when the AWG is power-cycled.
 
 JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format using
 `lowVoltage` as code `0` and `highVoltage` as code `16383`. The importer configures
