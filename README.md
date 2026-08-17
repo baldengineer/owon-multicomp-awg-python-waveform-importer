@@ -90,7 +90,9 @@ python .\tui.py
 
 It loads `defaults.toml` by default; other TOML profiles in the project directory
 are available from the profile dropdown. The UI exposes all configuration keys,
-VISA resource refresh and `*IDN?`, waveform-file sending, and a console at the bottom.
+VISA resource refresh and `*IDN?`, a file browser for waveform selection, waveform
+sending, CH1/CH2 output controls, and a console at the bottom. Install the dependencies
+from `requirements.txt` before launching the UI; it includes Textual and PyVISA.
 
 To leave the virtual environment when finished, run:
 
