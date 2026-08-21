@@ -265,11 +265,6 @@ class AwgTui(App[None]):
                 values[key] = str(raw)
         return values
 
-    def _apply_importer_defaults(self, values: dict[str, Any]) -> None:
-        importer.EXPECTED_IDENTITY_PREFIX = values["expected_identity_prefix"]
-        importer.MAX_POINT_COUNT = values["max_point_count"]
-        importer.MAX_DAC_CODE = values["max_dac_code"]
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "refresh-resources":
@@ -324,14 +319,14 @@ class AwgTui(App[None]):
     @work(thread=True)
     def _send_worker(self, path: Path, resource: str, values: dict[str, Any]) -> None:
         try:
-            self._apply_importer_defaults(values)
-            waveform = importer.load_waveform(path)
-            payload = importer.encode_dab(waveform)
+            config = importer.Config.from_defaults(values)
+            waveform = importer.load_waveform(path, config)
+            payload = importer.encode_dab(waveform, config)
             user_slot = values["channel"] if values["persist"] else None
             self.call_from_thread(self._log, f"Sending {path.name} ({waveform.sample_count} points)...")
             result = importer.upload_waveform(resource, values["timeout_ms"], waveform, payload, user_slot,
                                                values["channel"], values["enable_output"], values["voltage_vpp"],
-                                               values["offset_voltage"], values["frequency_hz"])
+                                               values["offset_voltage"], values["frequency_hz"], config)
             self.call_from_thread(self._log, f"Complete: {result['identity']} | CH{result['channel']} output={result['output']}")
         except (RuntimeError, ValueError, OSError) as exc:
             self.call_from_thread(self._log, f"Send failed: {exc}")

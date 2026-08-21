@@ -19,9 +19,32 @@ from typing import Any
 
 
 DEFAULTS_FILE = "defaults.toml"
-EXPECTED_IDENTITY_PREFIX: str
-MAX_POINT_COUNT: int
-MAX_DAC_CODE: int
+
+
+@dataclass(frozen=True)
+class Config:
+    """Validated immutable settings shared by parsing, encoding, and transport."""
+
+    expected_identity_prefix: str = ""
+    max_point_count: int = 100000
+    max_dac_code: int = 16383
+    timeout_ms: int = 60000
+
+    @classmethod
+    def from_defaults(cls, values: dict[str, Any]) -> "Config":
+        prefix = values.get("expected_identity_prefix", "")
+        if not isinstance(prefix, str):
+            raise ValueError("expected_identity_prefix must be a string")
+        point_count = values.get("max_point_count", cls.max_point_count)
+        dac_code = values.get("max_dac_code", cls.max_dac_code)
+        timeout_ms = values.get("timeout_ms", cls.timeout_ms)
+        if isinstance(point_count, bool) or not isinstance(point_count, int) or point_count < 2:
+            raise ValueError("max_point_count must be an integer of at least 2")
+        if isinstance(dac_code, bool) or not isinstance(dac_code, int) or dac_code <= 0:
+            raise ValueError("max_dac_code must be a positive integer")
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise ValueError("timeout_ms must be a positive integer")
+        return cls(prefix, point_count, dac_code, timeout_ms)
 
 
 def load_defaults(path: str | Path) -> dict[str, Any]:
@@ -106,14 +129,8 @@ def _finite_number(value: Any, field: str) -> float:
     return converted
 
 
-def load_arbdraw_json(path: str | Path) -> Waveform:
-    """Read and strictly validate the authoritative ArbDraw sample array."""
-    source = Path(path)
-    try:
-        project = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Could not read ArbDraw JSON: {exc}") from exc
-
+def waveform_from_document(project: dict[str, Any], config: Config) -> Waveform:
+    """Validate an already-parsed ArbDraw document and create a waveform."""
     if not isinstance(project, dict):
         raise ValueError("ArbDraw project must be a JSON object")
     if project.get("schema") != "arbdraw.waveform":
@@ -125,78 +142,55 @@ def load_arbdraw_json(path: str | Path) -> Waveform:
     if not isinstance(waveform, dict):
         raise ValueError("Missing waveform object")
 
-    sample_count_number = _finite_number(
-        waveform.get("sampleCount"), "waveform.sampleCount"
-    )
+    sample_count_number = _finite_number(waveform.get("sampleCount"), "waveform.sampleCount")
     sample_count = math.floor(sample_count_number + 0.5)
-    if not 2 <= sample_count <= MAX_POINT_COUNT:
-        raise ValueError(
-            f"waveform.sampleCount must resolve to 2 through {MAX_POINT_COUNT}"
-        )
-
+    if not 2 <= sample_count <= config.max_point_count:
+        raise ValueError(f"waveform.sampleCount must resolve to 2 through {config.max_point_count}")
     values = waveform.get("values")
     if not isinstance(values, list) or len(values) != sample_count:
         raise ValueError("waveform.values length must equal waveform.sampleCount")
-
     converted_values: list[float] = []
     for index, value in enumerate(values):
-        # ArbDraw requires actual JSON numbers in the sample array, not numeric strings.
         if isinstance(value, bool) or type(value) not in (int, float):
             raise ValueError(f"waveform.values[{index}] must be a finite JSON number")
         converted = float(value)
         if not math.isfinite(converted):
             raise ValueError(f"waveform.values[{index}] must be finite")
         converted_values.append(converted)
-
-    low_voltage = _finite_number(
-        waveform.get("lowVoltage"), "waveform.lowVoltage"
-    )
-    high_voltage = _finite_number(
-        waveform.get("highVoltage"), "waveform.highVoltage"
-    )
+    low_voltage = _finite_number(waveform.get("lowVoltage"), "waveform.lowVoltage")
+    high_voltage = _finite_number(waveform.get("highVoltage"), "waveform.highVoltage")
     if high_voltage <= low_voltage:
         raise ValueError("waveform.highVoltage must be greater than lowVoltage")
-
     tolerance = max(1.0, abs(low_voltage), abs(high_voltage)) * 1e-9
     for index, value in enumerate(converted_values):
         if value < low_voltage - tolerance or value > high_voltage + tolerance:
-            raise ValueError(
-                f"waveform.values[{index}]={value:g} is outside the declared "
-                f"range {low_voltage:g} through {high_voltage:g}"
-            )
-
-    sample_rate_msa = _finite_number(
-        waveform.get("sampleRateMSa"), "waveform.sampleRateMSa"
-    )
+            raise ValueError(f"waveform.values[{index}]={value:g} is outside the declared range {low_voltage:g} through {high_voltage:g}")
+    sample_rate_msa = _finite_number(waveform.get("sampleRateMSa"), "waveform.sampleRateMSa")
     if sample_rate_msa <= 0:
         raise ValueError("waveform.sampleRateMSa must be greater than zero")
-
-    frequency_hz = _finite_number(
-        waveform.get("frequencyHz"), "waveform.frequencyHz"
-    )
+    frequency_hz = _finite_number(waveform.get("frequencyHz"), "waveform.frequencyHz")
     if frequency_hz <= 0:
         raise ValueError("waveform.frequencyHz must be greater than zero")
-
     name = project.get("name", "Imported waveform")
-    if not isinstance(name, str):
-        name = str(name)
-    waveform_type = waveform.get("type", "custom")
-    if not isinstance(waveform_type, str):
-        waveform_type = "custom"
+    return Waveform(name=name if isinstance(name, str) else str(name),
+                    waveform_type=waveform.get("type", "custom") if isinstance(waveform.get("type", "custom"), str) else "custom",
+                    values=tuple(converted_values), low_voltage=low_voltage, high_voltage=high_voltage,
+                    sample_rate_sa=sample_rate_msa * 1_000_000.0, frequency_hz=frequency_hz)
 
-    return Waveform(
-        name=name,
-        waveform_type=waveform_type,
-        values=tuple(converted_values),
-        low_voltage=low_voltage,
-        high_voltage=high_voltage,
-        sample_rate_sa=sample_rate_msa * 1_000_000.0,
-        frequency_hz=frequency_hz,
-    )
+
+def load_arbdraw_json(path: str | Path, config: Config) -> Waveform:
+    """Read UTF-8 JSON and delegate validation to :func:`waveform_from_document`."""
+    source = Path(path)
+    try:
+        project = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read ArbDraw JSON: {exc}") from exc
+
+    return waveform_from_document(project, config)
 
 
 def load_csv(
-    path: str | Path, *, delimiter: str = ",", value_column: int | None = None
+    path: str | Path, config: Config, *, delimiter: str = ",", value_column: int | None = None
 ) -> Waveform:
     """Load a headerless CSV waveform, optionally selecting its voltage column."""
     source = Path(path)
@@ -237,8 +231,8 @@ def load_csv(
     except (OSError, UnicodeError, csv.Error) as exc:
         raise ValueError(f"Could not read CSV: {exc}") from exc
 
-    if not 2 <= len(values) <= MAX_POINT_COUNT:
-        raise ValueError(f"CSV must contain 2 through {MAX_POINT_COUNT} samples")
+    if not 2 <= len(values) <= config.max_point_count:
+        raise ValueError(f"CSV must contain 2 through {config.max_point_count} samples")
 
     intervals = [later - earlier for earlier, later in zip(times, times[1:])]
     if any(interval <= 0 for interval in intervals):
@@ -266,25 +260,25 @@ def load_csv(
 
 
 def load_waveform(
-    path: str | Path, *, csv_delimiter: str = ",", csv_value_column: int | None = None
+    path: str | Path, config: Config, *, csv_delimiter: str = ",", csv_value_column: int | None = None
 ) -> Waveform:
     """Load a waveform according to its filename extension."""
     source = Path(path)
     if source.suffix.lower() == ".csv":
         return load_csv(
-            source, delimiter=csv_delimiter, value_column=csv_value_column
+            source, config, delimiter=csv_delimiter, value_column=csv_value_column
         )
-    return load_arbdraw_json(source)
+    return load_arbdraw_json(source, config)
 
 
-def encode_dab(waveform: Waveform) -> bytes:
+def encode_dab(waveform: Waveform, config: Config) -> bytes:
     """Encode samples as verified unsigned 14-bit big-endian AWG codes."""
     span = waveform.amplitude_vpp
     codes = []
     for value in waveform.values:
         normalized = (value - waveform.low_voltage) / span
         normalized = min(1.0, max(0.0, normalized))
-        code = int(normalized * MAX_DAC_CODE + 0.5)
+        code = int(normalized * config.max_dac_code + 0.5)
         codes.append(code)
     return struct.pack(f">{len(codes)}H", *codes)
 
@@ -384,6 +378,7 @@ def upload_waveform(
     amplitude_vpp: float,
     offset_voltage: float,
     frequency_hz: float,
+    config: Config,
 ) -> dict[str, str]:
     """Bulk upload over USBTMC, persist it, select edit memory, and set final output."""
     try:
@@ -404,8 +399,8 @@ def upload_waveform(
         instrument.write_termination = "\n"
 
         identity = _query_nonempty(instrument, "*IDN?")
-        if EXPECTED_IDENTITY_PREFIX and not identity.startswith(
-            EXPECTED_IDENTITY_PREFIX
+        if config.expected_identity_prefix and not identity.startswith(
+            config.expected_identity_prefix
         ):
             raise RuntimeError(f"Unexpected instrument identity: {identity}")
 
@@ -507,7 +502,6 @@ def upload_waveform(
 
 
 def parse_args() -> argparse.Namespace:
-    global EXPECTED_IDENTITY_PREFIX, MAX_POINT_COUNT, MAX_DAC_CODE
     defaults_parser = argparse.ArgumentParser(add_help=False)
     defaults_parser.add_argument("--defaults-file", type=Path, default=DEFAULTS_FILE)
     defaults_args, _ = defaults_parser.parse_known_args()
@@ -515,9 +509,7 @@ def parse_args() -> argparse.Namespace:
         defaults = load_defaults(defaults_args.defaults_file)
     except ValueError as exc:
         defaults_parser.error(str(exc))
-    EXPECTED_IDENTITY_PREFIX = defaults["expected_identity_prefix"]
-    MAX_POINT_COUNT = defaults["max_point_count"]
-    MAX_DAC_CODE = defaults["max_dac_code"]
+    Config.from_defaults(defaults)
 
     parser = argparse.ArgumentParser(
         description=(
@@ -636,6 +628,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    try:
+        cli_defaults = load_defaults(args.defaults_file)
+        config = Config.from_defaults({**cli_defaults, "timeout_ms": args.visa_timeout_ms})
+    except ValueError as exc:
+        print(f"Invalid configuration: {exc}", file=sys.stderr)
+        return 2
     if (args.list_resources or args.idn is not None or args.output is not None) and args.waveform_file is not None:
         print(
             "Do not provide a waveform file with --list-resources, --idn, or --output",
@@ -715,10 +713,11 @@ def main() -> int:
     try:
         waveform = load_waveform(
             args.waveform_file,
+            config,
             csv_delimiter=args.csv_delimiter,
             csv_value_column=args.csv_value_column,
         )
-        payload = encode_dab(waveform)
+        payload = encode_dab(waveform, config)
         block = make_ieee_block(payload)
         amplitude_vpp = (
             waveform.amplitude_vpp
@@ -770,6 +769,7 @@ def main() -> int:
             amplitude_vpp,
             offset_voltage,
             frequency_hz,
+            config,
         )
         print(result["identity"])
         if result["user_memory"]:

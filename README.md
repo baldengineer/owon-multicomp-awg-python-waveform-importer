@@ -327,3 +327,20 @@ DATA:DATA EMEMory,#42000<2000 bytes of waveform data>
 
 Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
 (james@baldengineer.com).
+# Native ArbDraw bridge adapter
+
+This repository also exposes an in-memory adapter for an ArbDraw Python bridge. The public entry point is `arbdraw_bridge_adapter:send_waveform`. It accepts a parsed `arbdraw.waveform` document, validates and encodes it using the same code as the CLI, and uploads it through the existing OWON USBTMC sequence.
+
+Start the ArbDraw bridge from PowerShell with:
+
+```powershell
+python -m python_bridge --serve-app . --waveform-handler arbdraw_bridge_adapter:send_waveform
+```
+
+Bridge options default to channel 1, volatile memory (`persist = false`), output off, and a 60000 ms timeout. `user_slot` is 0–31 and requires persistence. Frequency, amplitude, and offset overrides are optional; otherwise they come from the ArbDraw document. Binary waveform uploads require a USBTMC VISA resource. Output is enabled only when explicitly requested after every upload step succeeds.
+
+Run hardware-free tests with:
+
+```powershell
+python -m pytest -q
+```
