@@ -50,8 +50,11 @@ class Config:
 def load_defaults(path: str | Path) -> dict[str, Any]:
     """Load and validate the flat TOML defaults table."""
     try:
-        with Path(path).open("rb") as stream:
-            defaults = tomllib.load(stream)
+        if hasattr(path, "read_text"):
+            defaults = tomllib.loads(path.read_text(encoding="utf-8"))
+        else:
+            with Path(path).open("rb") as stream:
+                defaults = tomllib.load(stream)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"Could not read defaults TOML: {exc}") from exc
     if not isinstance(defaults, dict):

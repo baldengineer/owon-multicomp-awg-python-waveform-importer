@@ -1,4 +1,5 @@
 import json
+from importlib.resources import files
 
 import pytest
 
@@ -25,6 +26,14 @@ def test_in_memory_loader_and_file_loader_share_validation(tmp_path):
     path = tmp_path / "waveform.json"
     path.write_text(json.dumps(document()), encoding="utf-8")
     assert awg_import.load_arbdraw_json(path, cfg).values == awg_import.waveform_from_document(document(), cfg).values
+
+
+def test_public_modules_and_packaged_defaults_are_importable():
+    from arbdraw_bridge_adapter import send_waveform as imported_sender
+
+    assert callable(imported_sender)
+    assert callable(awg_import.waveform_from_document)
+    assert files("owon_xdg3000").joinpath("defaults.toml").is_file()
 
 
 @pytest.mark.parametrize("change", [

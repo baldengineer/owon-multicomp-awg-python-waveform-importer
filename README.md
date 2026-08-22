@@ -329,12 +329,37 @@ Released under the [MIT License](LICENSE). Copyright © 2026 James Lewis
 (james@baldengineer.com).
 # Native ArbDraw bridge adapter
 
+## Installation
+
+From the ArbDraw repository, install this adapter in its virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .\python_bridge\owon-multicomp-awg-python-waveform-importer
+```
+
+For a normal wheel installation, build the wheel from this repository and install it:
+
+```powershell
+python -m build
+python -m pip install .\dist\owon_multicomp_awg_python_waveform_importer-0.1.0-py3-none-any.whl
+```
+
+For development and hardware-free tests:
+
+```powershell
+python -m pip install -e ".[dev,tui]"
+python -m pytest -q
+```
+
+The TUI dependency is optional for bridge-only use; install it with `.[tui]` when running `tui.py`.
+
 This repository also exposes an in-memory adapter for an ArbDraw Python bridge. The public entry point is `arbdraw_bridge_adapter:send_waveform`. It accepts a parsed `arbdraw.waveform` document, validates and encodes it using the same code as the CLI, and uploads it through the existing OWON USBTMC sequence.
 
 Start the ArbDraw bridge from PowerShell with:
 
 ```powershell
-python -m python_bridge --serve-app . --waveform-handler arbdraw_bridge_adapter:send_waveform
+python -m python_bridge --serve-app . `
+    --waveform-handler arbdraw_bridge_adapter:send_waveform
 ```
 
 Bridge options default to channel 1, volatile memory (`persist = false`), output off, and a 60000 ms timeout. `user_slot` is 0–31 and requires persistence. Frequency, amplitude, and offset overrides are optional; otherwise they come from the ArbDraw document. Binary waveform uploads require a USBTMC VISA resource. Output is enabled only when explicitly requested after every upload step succeeds.

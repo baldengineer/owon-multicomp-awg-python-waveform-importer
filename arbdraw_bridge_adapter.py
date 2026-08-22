@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
 import awg_import
@@ -64,8 +64,8 @@ def send_waveform(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _defaults() -> dict[str, Any]:
-    path = Path(__file__).with_name("defaults.toml")
     try:
-        return awg_import.load_defaults(path)
-    except ValueError:
+        resource = files("owon_xdg3000").joinpath("defaults.toml")
+        return awg_import.load_defaults(resource)
+    except (OSError, TypeError, ValueError):
         return {}

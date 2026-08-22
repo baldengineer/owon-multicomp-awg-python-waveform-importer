@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "owon-multicomp-awg-python-waveform-importer"
+version = "0.1.0"
+description = "ArbDraw waveform importer and native OWON XDG3000 bridge adapter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["PyVISA>=1.13"]
+
+[project.optional-dependencies]
+tui = ["textual>=0.50"]
+test = ["pytest>=8"]
+dev = ["pytest>=8", "build"]
+
+[tool.setuptools]
+py-modules = ["awg_import", "arbdraw_bridge_adapter"]
+
+[tool.setuptools.packages.find]
+include = ["owon_xdg3000"]
+
+[tool.setuptools.package-data]
+owon_xdg3000 = ["defaults.toml"]
