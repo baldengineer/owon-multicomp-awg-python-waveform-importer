@@ -9,7 +9,7 @@ is time in seconds and `y` is voltage in volts.
 
 The direct-control tools support identity queries, a point-by-point development upload,
 and fast USBTMC import of ArbDraw JSON and CSV waveforms. Imported waveforms are
-Persistence is controlled by `defaults.toml` (`persist = true` currently); use
+Persistence is controlled by the packaged defaults (`persist = true` currently); use
 `--persist` or `--no-persist` to override it for an individual import. Persistent
 waveforms are copied into a selectable `USER` slot, while non-persistent imports stay
 in volatile edit memory. The selected channel output remains off by default.
@@ -88,7 +88,7 @@ Launch the terminal UI with:
 python .\tui.py
 ```
 
-It loads `defaults.toml` by default; other TOML profiles in the project directory
+It loads the packaged defaults by default; other TOML profiles in the project directory
 are available from the profile dropdown. The UI exposes all configuration keys,
 VISA resource refresh and `*IDN?`, a file browser for waveform selection, waveform
 sending, CH1/CH2 output controls, and a console at the bottom. Install the dependencies
@@ -131,8 +131,8 @@ python .\awg_import.py --resource "USB0::0x5345::0x1235::2025332::INSTR" --chann
 python .\awg_import.py --resource "USB0::0x5345::0x1235::2025332::INSTR" --channel 1 --output off
 ```
 
-The importer requires `defaults.toml` in the working directory. Copy it or provide an
-alternate configuration with `--defaults-file`:
+The importer uses the packaged defaults independently of the working directory. Provide
+an alternate configuration with `--defaults-file` when needed:
 
 ```powershell
 python .\awg_import.py --defaults-file .\my-awg.toml .\waveform.json
@@ -144,7 +144,7 @@ its values, but a missing file or missing required setting causes the importer t
 ## TODO
 
 - Add support for saving user-specific settings in a local TOML file under the user's
-  home directory, with those settings layered over the project `defaults.toml` without
+  home directory, with those settings layered over the packaged defaults without
   modifying the repository defaults.
 
 Both discovery actions can be combined. The resource list is printed first, followed
@@ -230,8 +230,8 @@ python .\awg_import.py .\examples\hello_world_56700.csv --dry-run
 ```
 
 For CSV input, the importer derives sample rate from timestamp spacing, voltage range
-from the samples, and repetition frequency from the full record length. Settings in
-`defaults.toml` and command-line overrides continue to take precedence for channel
+from the samples, and repetition frequency from the full record length. Packaged
+defaults and command-line overrides continue to take precedence for channel
 frequency, amplitude, and offset.
 
 Upload the waveform to volatile `EMEMory` and select it on the selected channel
@@ -259,8 +259,8 @@ python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json --channel 2
 
 Only channels `1` and `2` are accepted.
 
-Use `--persist` to enable persistent storage (or set `persist = true` in
-`defaults.toml`). Its default destination is `USER1` for channel 1 and `USER2` for
+Use `--persist` to enable persistent storage (or set `persist = true` in a local
+profile). Its default destination is `USER1` for channel 1 and `USER2` for
 channel 2.
 
 Override the JSON-derived channel settings when needed:
@@ -272,7 +272,7 @@ python .\awg_import.py .\examples\sample_waveform_01_funky_sine.json `
 
 Frequency is specified in hertz, amplitude in Vpp, and offset in volts. (Explicit
 aliases `--frequency-hz`, `--amplitude-vpp`, and `--offset-v` are also accepted.) The
-configured defaults come from `defaults.toml`; command-line values take precedence.
+configured defaults come from the packaged TOML; command-line values take precedence.
 
 Choose another persistent slot with `--persist --user-slot 0..31`; an explicit slot
 overrides the channel-based default. The importer validates the schema, version, point
@@ -287,7 +287,7 @@ JSON voltage values are normalized into the AWG's unsigned 14-bit bulk format us
 `lowVoltage` as code `0` and `highVoltage` as code `16383`. The importer configures
 the selected channel's amplitude and offset from those levels. It reports
 `sampleRateMSa` as the sample rate and sets the AWG frequency from the JSON
-`frequencyHz` value, unless overridden on the command line or in `defaults.toml`. The
+`frequencyHz` value, unless overridden on the command line or in a local profile. The
 output is kept off throughout the import. The importer locks the front panel while uploading, storing, selecting, and
 configuring the waveform, then unlocks it when finished. Its cleanup path also unlocks
 the panel if an import command fails.

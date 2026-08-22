@@ -34,6 +34,7 @@ def test_public_modules_and_packaged_defaults_are_importable():
     assert callable(imported_sender)
     assert callable(awg_import.waveform_from_document)
     assert files("owon_xdg3000").joinpath("defaults.toml").is_file()
+    assert awg_import.load_defaults("defaults.toml")["max_point_count"] == 100000
 
 
 @pytest.mark.parametrize("change", [

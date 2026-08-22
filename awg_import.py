@@ -14,6 +14,7 @@ import time
 import tomllib
 import warnings
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -47,9 +48,16 @@ class Config:
         return cls(prefix, point_count, dac_code, timeout_ms)
 
 
-def load_defaults(path: str | Path) -> dict[str, Any]:
+def packaged_defaults_resource() -> Any:
+    """Return the canonical defaults bundled with the installable package."""
+    return files("owon_xdg3000").joinpath("defaults.toml")
+
+
+def load_defaults(path: str | Path | Any) -> dict[str, Any]:
     """Load and validate the flat TOML defaults table."""
     try:
+        if isinstance(path, (str, Path)) and Path(path).name == DEFAULTS_FILE and not Path(path).exists():
+            path = packaged_defaults_resource()
         if hasattr(path, "read_text"):
             defaults = tomllib.loads(path.read_text(encoding="utf-8"))
         else:

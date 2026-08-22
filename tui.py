@@ -180,7 +180,8 @@ class AwgTui(App[None]):
         select = self.query_one("#config-select", Select)
         select.set_options([(name, name) for name in self.configs])
         if not paths:
-            self._log("No TOML files found in the project directory")
+            self._load_config(importer.packaged_defaults_resource())
+            self._log("No local TOML files found; loaded packaged defaults")
             return
         self._load_config(paths[0])
         select.value = paths[0].name
