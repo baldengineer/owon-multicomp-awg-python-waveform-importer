@@ -65,5 +65,7 @@ def send_waveform(request: dict[str, Any]) -> dict[str, Any]:
 def _defaults() -> dict[str, Any]:
     try:
         return awg_import.load_defaults(awg_import.packaged_defaults_resource())
-    except (OSError, TypeError, ValueError):
-        return {}
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Packaged OWON defaults are unavailable or invalid; refusing to send waveform"
+        ) from exc

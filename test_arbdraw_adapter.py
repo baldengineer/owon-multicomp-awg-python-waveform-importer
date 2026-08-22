@@ -4,6 +4,7 @@ from importlib.resources import files
 import pytest
 
 import awg_import
+import arbdraw_bridge_adapter
 from arbdraw_bridge_adapter import send_waveform
 
 
@@ -35,6 +36,15 @@ def test_public_modules_and_packaged_defaults_are_importable():
     assert callable(awg_import.waveform_from_document)
     assert files("owon_xdg3000").joinpath("defaults.toml").is_file()
     assert awg_import.load_defaults("defaults.toml")["max_point_count"] == 100000
+
+
+def test_missing_or_invalid_packaged_defaults_fail_closed(monkeypatch):
+    def invalid_defaults(_resource):
+        raise ValueError("invalid defaults")
+
+    monkeypatch.setattr(awg_import, "load_defaults", invalid_defaults)
+    with pytest.raises(RuntimeError, match="Packaged OWON defaults are unavailable"):
+        arbdraw_bridge_adapter._defaults()
 
 
 @pytest.mark.parametrize("change", [
